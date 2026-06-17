@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ssl
 import asyncio
 from typing import Literal
 from dataclasses import dataclass, field
@@ -8,7 +7,7 @@ from urllib.parse import urlsplit
 from importlib.metadata import version
 
 from ..http import H1
-from ..tls import TLS, TLSClientConfig
+from ..tls import TLSContext, TLSClientConfig
 from ..models import Request, Response, Headers
 from ..process import process_response, wrap_streaming_response
 from ..websocket import WebSocket, generate_key, check_accept
@@ -85,7 +84,7 @@ class Handler:
         self.connections: set = set()
         self.tasks: set[asyncio.Task] = set()
 
-        self._ssl_context: ssl.SSLContext | None = None
+        self._tls_client_context: TLSContext | None = None
 
     def create_task(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -93,10 +92,11 @@ class Handler:
         task.add_done_callback(self.tasks.discard)
         return task
 
-    def ssl_context(self) -> ssl.SSLContext:
-        if self._ssl_context is None:
-            self._ssl_context = TLS.from_client_config(self.config).context
-        return self._ssl_context
+    def tls_client_context(self) -> TLSContext:
+        if self._tls_client_context is None:
+            alpn = tuple(p for p in self.config.protocols if p != "h3")
+            self._tls_client_context = TLSContext.for_client(self.config.tls, alpn=alpn)
+        return self._tls_client_context
 
     def ordered_kinds(self) -> list[str]:
         protocols = self.config.protocols
@@ -154,7 +154,7 @@ class Handler:
                 if kind == "h3":
                     conn = await self.connect_quic(host, port, authority)
                 else:
-                    conn = await self.connect_tcp(key, host, port, authority, self.ssl_context())
+                    conn = await self.connect_tcp(key, host, port, authority, self.tls_client_context())
                 self.origin_kind[key] = kind
                 return conn
             except Exception as exc:
@@ -162,11 +162,11 @@ class Handler:
 
         raise last_error or ConnectionError(f"failed to connect to {host}:{port}")
 
-    async def connect_tcp(self, key: tuple, host: str, port: int, authority: str, ssl_context: ssl.SSLContext | None) -> TCPClientProtocol:
+    async def connect_tcp(self, key: tuple, host: str, port: int, authority: str, tls_context: TLSContext | None) -> TCPClientProtocol:
         loop = asyncio.get_running_loop()
-        protocol = TCPClientProtocol(self, key, authority)
+        protocol = TCPClientProtocol(self, key, authority, tls_context=tls_context, server_name=host if tls_context else None)
 
-        await asyncio.wait_for(loop.create_connection(lambda: protocol, host, port, ssl=ssl_context, server_hostname=host if ssl_context else None), timeout=self.config.connect_timeout)
+        await asyncio.wait_for(loop.create_connection(lambda: protocol, host, port), timeout=self.config.connect_timeout)
         await protocol.ready
         return protocol
 
@@ -229,7 +229,7 @@ class Handler:
                 if kind == "h3":
                     continue
 
-                conn = await self.connect_tcp(key, host, port, authority, self.ssl_context())
+                conn = await self.connect_tcp(key, host, port, authority, self.tls_client_context())
                 self.connections.add(conn)
 
                 if conn.mode == "h2":
@@ -237,21 +237,23 @@ class Handler:
 
                 conn.close()
                 self.discard(conn)
-                return await self.websocket_h1(host, port, authority, request, subprotocols, self.ssl_context())
+                return await self.websocket_h1(host, port, authority, request, subprotocols, self.tls_client_context())
 
             except Exception as exc:
                 last_error = exc
 
         raise last_error or ConnectionError(f"failed to establish websocket to {host}:{port}")
 
-    async def websocket_h1(self, host: str, port: int, authority: str, request: Request, subprotocols: list[str] | None, ssl_context: ssl.SSLContext | None) -> WebSocket:
+    async def websocket_h1(self, host: str, port: int, authority: str, request: Request, subprotocols: list[str] | None, tls_context: TLSContext | None) -> WebSocket:
         loop = asyncio.get_running_loop()
-        protocol = WSClientProtocol(loop, self.config.max_websocket_message_size)
+        protocol = WSClientProtocol(loop, self.config.max_websocket_message_size, tls_context=tls_context, server_name=host if tls_context else None)
 
         await asyncio.wait_for(
-            loop.create_connection(lambda: protocol, host, port, ssl=ssl_context, server_hostname=host if ssl_context else None),
+            loop.create_connection(lambda: protocol, host, port),
             timeout=self.config.connect_timeout,
         )
+
+        await asyncio.wait_for(protocol.ready, self.config.connect_timeout)
 
         key = generate_key()
         request.headers.set("Upgrade", "websocket")

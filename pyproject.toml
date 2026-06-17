@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "nercone-kaede"
-version = "1.0.0"
+version = "1.1.0"
 description = "Python Library for Processing HTTP Request/Response"
 readme = { file = "README.md", content-type = "text/markdown" }
 authors = [ { name = "Nercone", email = "nercone@nercone.dev" } ]
@@ -28,3 +28,10 @@ GitHub = "https://github.com/nercone-aki/kaede/"
 
 [tool.uv.build-backend]
 module-name = "kaede"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]

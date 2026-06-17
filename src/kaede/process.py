@@ -316,17 +316,10 @@ def decompress_once(data: bytes, encoding: str, max_size: int | None) -> bytes:
         return bytes(out)
 
     if enc == "zstd":
-        dobj = zstandard.ZstdDecompressor().decompressobj()
-
-        if max_size is not None:
-            out = dobj.decompress(data, max_length=max_size + 1)
-
-            if len(out) > max_size or dobj.decompress(b"", max_length=1):
-                raise ValueError("decompressed body exceeds max_body_size")
-
-            return out
-
-        return dobj.decompress(data)
+        out = zstandard.ZstdDecompressor().decompress(data)
+        if max_size is not None and len(out) > max_size:
+            raise ValueError("decompressed body exceeds max_body_size")
+        return out
 
     raise ValueError(f"unsupported Content-Encoding: {enc!r}")
 

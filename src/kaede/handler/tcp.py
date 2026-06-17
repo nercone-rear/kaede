@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import os
-import ssl
 import asyncio
 import ipaddress
 from typing import Literal
 
+from ..api import ClientHandler, ServerHandler
 from ..http import H1, H2, H2WSUpgrade
-from ..tls import TLS, TLSInfo
+from ..tls import TLSInfo, TLSContext, RecordTLS
 from ..models import Request, Response, Headers
 from ..process import process_request
 from ..websocket import WebSocket, WebSocketProtocolError, compute_accept, parse_frames
 from .common import parse_peername, negotiate_websocket, MAX_RESPONSE_HEADER_SIZE, StreamState, dispatch_event, consume_response
+from .tls_transport import TLSTransport, tls_start, tls_feed
 
 class H2WebSocketTransport:
     def __init__(self, h2: H2, stream_id: int, transport: asyncio.Transport):
@@ -31,11 +32,13 @@ class H2WebSocketTransport:
         if out and not self.transport.is_closing():
             self.transport.write(out)
 
-class TCPProtocol(asyncio.Protocol):
-    def __init__(self, handler: Handler):
+class TCPServerProtocol(asyncio.Protocol):
+    def __init__(self, handler: ServerHandler):
         self.handler = handler
 
-        self.transport: asyncio.Transport | None = None
+        self.transport: asyncio.Transport | TLSTransport | None = None
+        self.raw_transport: asyncio.Transport | None = None
+        self.tls_engine: RecordTLS | None = None
         self.buffer = bytearray()
 
         self.websocket: WebSocket | None = None
@@ -79,6 +82,7 @@ class TCPProtocol(asyncio.Protocol):
             self.transport.close()
 
     def connection_made(self, transport: asyncio.BaseTransport):
+        self.raw_transport = transport
         self.transport = transport
         self.client = parse_peername(transport)
 
@@ -89,25 +93,53 @@ class TCPProtocol(asyncio.Protocol):
         if isinstance(transport, asyncio.Transport):
             self.handler.active_transports.add(transport)
 
-        ssl_object: ssl.SSLObject | None = transport.get_extra_info("ssl_object")
-        if ssl_object is not None:
-            self.secure = True
-            self.tls = TLS.extract_tls_info(ssl_object)
-
-            if ssl_object.selected_alpn_protocol() == "h2" and "h2" in self.handler.config.protocols:
-                self.h2 = H2(connection_id=os.urandom(8), max_body_size=self.handler.config.max_body_size, max_concurrent_streams=self.handler.config.max_concurrent_streams, max_stream_resets=self.handler.config.max_stream_resets)
-                self.transport.write(self.h2.initiate())
-
-            elif "http/1.1" not in self.handler.config.protocols:
-                self.transport.close()
-                return
-
+        if self.handler.listener.kind == "https":
+            self.tls_engine = self.handler.tls_server_context().connection()
+            self.transport = TLSTransport(transport, self.tls_engine)
         else:
-            self.secure = self.handler.listener.kind == "https"
+            self.secure = False
 
         self.reset_keepalive()
 
+    def on_tls_established(self):
+        engine = self.tls_engine
+        self.secure = True
+        self.tls = engine.info()
+
+        if engine.selected_alpn() == "h2" and "h2" in self.handler.config.protocols:
+            self.h2 = H2(connection_id=os.urandom(8), max_body_size=self.handler.config.max_body_size, max_concurrent_streams=self.handler.config.max_concurrent_streams, max_stream_resets=self.handler.config.max_stream_resets)
+            self.transport.write(self.h2.initiate())
+
+        elif "http/1.1" not in self.handler.config.protocols:
+            self.transport.close()
+
     def data_received(self, data: bytes):
+        if self.transport is None:
+            return
+
+        if self.tls_engine is None:
+            self.feed_plaintext(data)
+            return
+
+        engine = self.tls_engine
+        try:
+            became_ready, plaintext = tls_feed(engine, self.raw_transport, data)
+        except Exception:
+            self.transport.close()
+            return
+
+        if became_ready:
+            self.on_tls_established()
+            if self.transport is None or self.transport.is_closing():
+                return
+
+        if plaintext:
+            self.feed_plaintext(plaintext)
+
+        if engine.closed and self.transport is not None and not self.transport.is_closing():
+            self.transport.close()
+
+    def feed_plaintext(self, data: bytes):
         if self.transport is None:
             return
 
@@ -300,11 +332,12 @@ class TCPProtocol(asyncio.Protocol):
             self.keep_alive_handle.cancel()
             self.keep_alive_handle = None
 
-        transport = self.transport
         self.transport = None
+        raw = self.raw_transport
+        self.raw_transport = None
 
-        if transport is not None:
-            self.handler.active_transports.discard(transport)
+        if raw is not None:
+            self.handler.active_transports.discard(raw)
 
         if self.h2 is not None:
             for queue in self.h2.websocket_streams.values():
@@ -657,16 +690,18 @@ class TCPProtocol(asyncio.Protocol):
 
             await self.h2.flow_control_event.wait()
 
-H1Protocol = TCPProtocol
-H2Protocol = TCPProtocol
-
 class TCPClientProtocol(asyncio.Protocol):
-    def __init__(self, handler: Handler, key: tuple, authority: str):
+    def __init__(self, handler: ClientHandler, key: tuple, authority: str, tls_context: TLSContext | None = None, server_name: str | None = None):
         self.handler = handler
         self.key = key
         self.authority = authority
 
-        self.transport: asyncio.Transport | None = None
+        self.transport: asyncio.Transport | TLSTransport | None = None
+        self.raw_transport: asyncio.Transport | None = None
+        self.tls_context = tls_context
+        self.server_name = server_name
+        self.tls_engine: RecordTLS | None = None
+        self.tls_ready = False
         self.ready: asyncio.Future = asyncio.get_running_loop().create_future()
         self.closed = False
 
@@ -689,10 +724,27 @@ class TCPClientProtocol(asyncio.Protocol):
         self.streams: dict[int, StreamState] = {}
 
     def connection_made(self, transport: asyncio.BaseTransport):
-        self.transport = transport
+        self.raw_transport = transport
 
-        ssl_object: ssl.SSLObject | None = transport.get_extra_info("ssl_object")
-        if ssl_object is not None and ssl_object.selected_alpn_protocol() == "h2":
+        if self.tls_context is not None:
+            self.tls_engine = self.tls_context.connection(self.server_name)
+            self.transport = TLSTransport(transport, self.tls_engine)
+            try:
+                tls_start(self.tls_engine, transport)
+            except Exception as exc:
+                if not self.ready.done():
+                    self.ready.set_exception(exc)
+                transport.close()
+            return
+
+        self.transport = transport
+        if not self.ready.done():
+            self.ready.set_result(None)
+
+    def on_tls_established(self):
+        self.tls_ready = True
+
+        if self.tls_engine.selected_alpn() == "h2":
             self.mode = "h2"
             self.multiplexed = True
             self.h2 = H2(client_side=True, max_body_size=self.handler.config.max_body_size, max_concurrent_streams=self.handler.config.max_concurrent_streams)
@@ -702,6 +754,29 @@ class TCPClientProtocol(asyncio.Protocol):
             self.ready.set_result(None)
 
     def data_received(self, data: bytes):
+        if self.tls_engine is None:
+            self.feed_decrypted(data)
+            return
+
+        engine = self.tls_engine
+        try:
+            became_ready, plaintext = tls_feed(engine, self.raw_transport, data)
+        except Exception as exc:
+            if not self.ready.done():
+                self.ready.set_exception(exc)
+            self.close()
+            return
+
+        if became_ready:
+            self.on_tls_established()
+
+        if plaintext:
+            self.feed_decrypted(plaintext)
+
+        if engine.closed:
+            self.close()
+
+    def feed_decrypted(self, data: bytes):
         if self.mode == "h2":
             self.feed_h2(data)
         else:
@@ -1063,17 +1138,65 @@ class H2ClientWSTransport:
             self.conn.transport.write(out)
 
 class WSClientProtocol(asyncio.Protocol):
-    def __init__(self, loop: asyncio.AbstractEventLoop, max_message_size: int):
-        self.transport: asyncio.Transport | None = None
+    def __init__(self, loop: asyncio.AbstractEventLoop, max_message_size: int, tls_context: TLSContext | None = None, server_name: str | None = None):
+        self.transport: asyncio.Transport | TLSTransport | None = None
+        self.raw_transport: asyncio.Transport | None = None
+        self.tls_context = tls_context
+        self.server_name = server_name
+        self.tls_engine: RecordTLS | None = None
+        self.tls_ready = False
+        self.ready: asyncio.Future = loop.create_future()
         self.buffer = bytearray()
         self.handshake: asyncio.Future = loop.create_future()
         self.ws: WebSocket | None = None
         self.max_message_size = max_message_size
 
     def connection_made(self, transport: asyncio.BaseTransport):
+        self.raw_transport = transport
+
+        if self.tls_context is not None:
+            self.tls_engine = self.tls_context.connection(self.server_name)
+            self.transport = TLSTransport(transport, self.tls_engine)
+            try:
+                tls_start(self.tls_engine, transport)
+            except Exception as exc:
+                if not self.ready.done():
+                    self.ready.set_exception(exc)
+                transport.close()
+            return
+
         self.transport = transport
+        if not self.ready.done():
+            self.ready.set_result(None)
 
     def data_received(self, data: bytes):
+        if self.tls_engine is None:
+            self.feed_decrypted(data)
+            return
+
+        engine = self.tls_engine
+        try:
+            became_ready, plaintext = tls_feed(engine, self.raw_transport, data)
+        except Exception as exc:
+            if not self.ready.done():
+                self.ready.set_exception(exc)
+            elif not self.handshake.done():
+                self.handshake.set_exception(exc)
+            if self.transport is not None:
+                self.transport.close()
+            return
+
+        if became_ready and not self.ready.done():
+            self.tls_ready = True
+            self.ready.set_result(None)
+
+        if plaintext:
+            self.feed_decrypted(plaintext)
+
+        if engine.closed and self.transport is not None and not self.transport.is_closing():
+            self.transport.close()
+
+    def feed_decrypted(self, data: bytes):
         if self.ws is None:
             self.buffer.extend(data)
             idx = self.buffer.find(b"\r\n\r\n")

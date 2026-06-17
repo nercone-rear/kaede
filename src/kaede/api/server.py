@@ -8,7 +8,7 @@ import asyncio
 from typing import Literal
 from dataclasses import dataclass, field
 
-from ..tls import TLS, TLSServerConfig
+from ..tls import TLSContext, TLSServerConfig
 from ..models import Listener, Callback
 from ..websocket import WebSocket
 from ..handler.tcp import TCPProtocol
@@ -53,6 +53,8 @@ class Handler:
         self.tcp_server: asyncio.base_events.Server | None = None
         self.quic_transport: asyncio.DatagramTransport | None = None
 
+        self._tls_server_context: TLSContext | None = None
+
         self.active_tasks: set[asyncio.Task] = set()
         self.active_transports: set[asyncio.Transport] = set()
         self.active_websockets: set[WebSocket] = set()
@@ -63,6 +65,12 @@ class Handler:
         task.add_done_callback(self.active_tasks.discard)
         return task
 
+    def tls_server_context(self) -> TLSContext:
+        if self._tls_server_context is None:
+            alpn = tuple(p for p in self.config.protocols if p != "h3")
+            self._tls_server_context = TLSContext.for_server(self.config.tls, alpn=alpn)
+        return self._tls_server_context
+
     async def start(self):
         loop = asyncio.get_running_loop()
         kind = self.listener.kind
@@ -71,8 +79,8 @@ class Handler:
             self.tcp_server = await loop.create_server(lambda: TCPProtocol(self), sock=self.listener.sock)
 
         elif kind == "https":
-            ssl_context = TLS.from_server_config(self.config).context
-            self.tcp_server = await loop.create_server(lambda: TCPProtocol(self), sock=self.listener.sock, ssl=ssl_context)
+            self.tls_server_context()
+            self.tcp_server = await loop.create_server(lambda: TCPProtocol(self), sock=self.listener.sock)
 
         elif kind == "quic":
             transport, _ = await loop.create_datagram_endpoint(lambda: QuicServerProtocol(self), sock=self.listener.sock)
