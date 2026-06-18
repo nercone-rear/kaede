@@ -264,3 +264,183 @@ class TestH3RequestHeaders:
         built = H3.build_request_headers(req, "example.com")
         names = [n for n, v in built]
         assert b"content-length" not in names
+
+# RFC 9000 §16: Buffer — push operations and state
+
+class TestBufferPush:
+    def test_push_uint8_appends_single_byte(self):
+        buf = Buffer()
+        buf.push_uint8(0xAB)
+        assert buf.data == bytes([0xAB])
+
+    def test_push_uint8_masks_to_byte(self):
+        buf = Buffer()
+        buf.push_uint8(0x1FF)  # only lowest byte used
+        assert len(buf) == 1
+
+    def test_push_uint16_big_endian(self):
+        buf = Buffer()
+        buf.push_uint16(0x0102)
+        assert buf.data == b"\x01\x02"
+
+    def test_push_uint32_big_endian(self):
+        buf = Buffer()
+        buf.push_uint32(0x01020304)
+        assert buf.data == b"\x01\x02\x03\x04"
+
+    def test_push_uint64_big_endian(self):
+        buf = Buffer()
+        buf.push_uint64(0x0102030405060708)
+        assert buf.data == b"\x01\x02\x03\x04\x05\x06\x07\x08"
+
+    def test_push_bytes_appends_data(self):
+        buf = Buffer()
+        buf.push_bytes(b"hello")
+        assert buf.data == b"hello"
+
+    def test_push_uint_var_produces_decodeable_value(self):
+        """push_uint_var must produce bytes that pull_uint_var can decode."""
+        for value in [0, 63, 64, 16383, 16384, 1073741823, 1073741824]:
+            buf = Buffer()
+            buf.push_uint_var(value)
+            reader = Buffer(buf.data)
+            assert reader.pull_uint_var() == value
+
+    def test_push_and_pull_roundtrip_uint8(self):
+        buf = Buffer()
+        buf.push_uint8(0xFF)
+        reader = Buffer(buf.data)
+        assert reader.pull_uint8() == 0xFF
+
+    def test_push_and_pull_roundtrip_uint16(self):
+        buf = Buffer()
+        buf.push_uint16(0xBEEF)
+        reader = Buffer(buf.data)
+        assert reader.pull_uint16() == 0xBEEF
+
+    def test_push_and_pull_roundtrip_uint32(self):
+        buf = Buffer()
+        buf.push_uint32(0xDEADBEEF)
+        reader = Buffer(buf.data)
+        assert reader.pull_uint32() == 0xDEADBEEF
+
+    def test_push_and_pull_roundtrip_uint64(self):
+        buf = Buffer()
+        buf.push_uint64(0xCAFEBABEDEADBEEF)
+        reader = Buffer(buf.data)
+        assert reader.pull_uint64() == 0xCAFEBABEDEADBEEF
+
+    def test_sequential_pushes_appended_in_order(self):
+        buf = Buffer()
+        buf.push_uint8(0x01)
+        buf.push_uint8(0x02)
+        buf.push_uint8(0x03)
+        assert buf.data == b"\x01\x02\x03"
+
+class TestBufferState:
+    def test_tell_at_zero_initially(self):
+        buf = Buffer(b"hello")
+        assert buf.tell() == 0
+
+    def test_tell_advances_after_pull(self):
+        buf = Buffer(b"hello")
+        buf.pull_uint8()
+        assert buf.tell() == 1
+
+    def test_seek_changes_position(self):
+        buf = Buffer(b"hello")
+        buf.seek(3)
+        assert buf.tell() == 3
+
+    def test_remaining_decreases_on_read(self):
+        buf = Buffer(b"hello")
+        assert buf.remaining() == 5
+        buf.pull_uint8()
+        assert buf.remaining() == 4
+
+    def test_eof_false_with_data(self):
+        buf = Buffer(b"x")
+        assert buf.eof() is False
+
+    def test_eof_true_after_exhausted(self):
+        buf = Buffer(b"x")
+        buf.pull_uint8()
+        assert buf.eof() is True
+
+    def test_eof_true_on_empty_buffer(self):
+        buf = Buffer(b"")
+        assert buf.eof() is True
+
+    def test_len_returns_total_data_length(self):
+        buf = Buffer(b"hello")
+        assert len(buf) == 5
+
+    def test_len_unaffected_by_read_position(self):
+        """len() returns the total buffer size, not remaining bytes."""
+        buf = Buffer(b"hello")
+        buf.pull_uint8()
+        assert len(buf) == 5  # still 5, pos just moved
+
+    def test_data_returns_all_bytes(self):
+        raw = b"\x01\x02\x03"
+        buf = Buffer(raw)
+        assert buf.data == raw
+
+    def test_pull_bytes_past_end_raises_buffer_error(self):
+        """Reading beyond the buffer end must raise BufferError (a ValueError subclass)."""
+        from kaede.quic.packet import BufferError
+        buf = Buffer(b"hi")
+        with pytest.raises(BufferError):
+            buf.pull_bytes(10)
+
+    def test_pull_uint8_past_end_raises_buffer_error(self):
+        from kaede.quic.packet import BufferError
+        buf = Buffer(b"")
+        with pytest.raises(BufferError):
+            buf.pull_uint8()
+
+    def test_pull_uint16_past_end_raises_buffer_error(self):
+        from kaede.quic.packet import BufferError
+        buf = Buffer(b"\x01")  # only 1 byte, needs 2
+        with pytest.raises(BufferError):
+            buf.pull_uint16()
+
+class TestEncodeUintVarEdgeCases:
+    def test_negative_value_raises_value_error(self):
+        """RFC 9000 §16: Variable-length integers are non-negative."""
+        with pytest.raises(ValueError):
+            encode_uint_var(-1)
+
+    def test_max_value_is_accepted(self):
+        """RFC 9000 §16: Maximum QUIC varint is 2^62 − 1."""
+        max_val = 0x3FFFFFFFFFFFFFFF  # 2^62 - 1
+        encoded = encode_uint_var(max_val)
+        assert len(encoded) == 8
+        buf = Buffer(encoded)
+        assert buf.pull_uint_var() == max_val
+
+    def test_too_large_raises_value_error(self):
+        """Values >= 2^62 cannot be encoded."""
+        with pytest.raises(ValueError):
+            encode_uint_var(0x4000000000000000)
+
+    def test_zero_encoded_in_one_byte(self):
+        assert encode_uint_var(0) == b"\x00"
+
+    def test_boundary_63_is_one_byte(self):
+        assert len(encode_uint_var(63)) == 1
+
+    def test_boundary_64_is_two_bytes(self):
+        assert len(encode_uint_var(64)) == 2
+
+    def test_boundary_16383_is_two_bytes(self):
+        assert len(encode_uint_var(16383)) == 2
+
+    def test_boundary_16384_is_four_bytes(self):
+        assert len(encode_uint_var(16384)) == 4
+
+    def test_boundary_1073741823_is_four_bytes(self):
+        assert len(encode_uint_var(1073741823)) == 4
+
+    def test_boundary_1073741824_is_eight_bytes(self):
+        assert len(encode_uint_var(1073741824)) == 8

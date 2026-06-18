@@ -1,11 +1,16 @@
 """
-RFC 9113 (HTTP/2) header building conformance tests.
+RFC 9113 (HTTP/2) header building and connection conformance tests.
 """
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import pytest
-from kaede.models import Request, Response, Headers
-from kaede.http.h2 import H2, H2_FORBIDDEN_HEADERS
+import h2.config
+import h2.connection
+import h2.errors
+from kaede.models import Request, Response, Headers, RawRequest
+from kaede.http.h2 import H2, H2Connection, H2Info, H2_FORBIDDEN_HEADERS
 
 FORBIDDEN = list(H2_FORBIDDEN_HEADERS)
 
@@ -285,3 +290,293 @@ class TestH2ContentLength:
         built = H2.build_request_headers(req, "example.com", body=body)
         cl_values = [v for n, v in built if n == "content-length"]
         assert cl_values == [str(len(body))]
+
+# RFC 9113 §5 / §8: H2Connection.receive() — server-side request parsing
+
+CLIENT_ADDR = (ipaddress.IPv4Address("127.0.0.1"), 12345)
+
+class MockConfig:
+    max_body_size = 10 * 1024 * 1024
+    max_stream_resets = 1000
+    max_concurrent_streams = 100
+    max_stream_buffer_size = 65536
+
+class MockHandler:
+    config = MockConfig()
+
+class MockProtocol:
+    def __init__(self):
+        self.handler = MockHandler()
+        self.transport = None
+        self.closed = False
+
+def make_h2_pair():
+    """Return (server H2Connection, h2-library client) after a full connection handshake."""
+    mock = MockProtocol()
+    server = H2Connection(mock, is_client=False)
+    server_preface = server.initiate()
+
+    client = h2.connection.H2Connection(config=h2.config.H2Configuration(client_side=True, header_encoding="utf-8"))
+    client.initiate_connection()
+    client_preface = client.data_to_send()
+
+    out, _, _, _ = server.receive(client_preface, client=CLIENT_ADDR)
+    client.receive_data(server_preface)
+    if out:
+        client.receive_data(out)
+    client_ack = client.data_to_send()
+    if client_ack:
+        server.receive(client_ack, client=CLIENT_ADDR)
+
+    return server, client
+
+class TestH2ReceiveValidRequests:
+    """RFC 9113 §8.3: Valid request semantics."""
+
+    def test_get_request_parsed(self):
+        """A complete GET request must be returned in the completed list."""
+        server, client = make_h2_pair()
+        sid = client.get_next_available_stream_id()
+        client.send_headers(sid, [
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":authority", "example.com"),
+        ], end_stream=True)
+        data = client.data_to_send()
+        _, requests, _, _ = server.receive(data, client=CLIENT_ADDR)
+        assert len(requests) == 1
+        assert requests[0].method == "GET"
+        assert requests[0].target == "/"
+
+    def test_post_with_body_parsed(self):
+        """POST with a request body must be accumulated and delivered."""
+        server, client = make_h2_pair()
+        sid = client.get_next_available_stream_id()
+        body = b"hello world"
+        client.send_headers(sid, [
+            (":method", "POST"),
+            (":scheme", "https"),
+            (":path", "/submit"),
+            (":authority", "example.com"),
+            ("content-length", str(len(body))),
+        ], end_stream=False)
+        client.send_data(sid, body, end_stream=True)
+        data = client.data_to_send()
+        _, requests, _, _ = server.receive(data, client=CLIENT_ADDR)
+        assert len(requests) == 1
+        req = requests[0]
+        assert req.method == "POST"
+        assert req.body == body
+
+    def test_h2info_stream_id_populated(self):
+        """RFC 9113 §5.1: Each request must carry the originating stream ID."""
+        server, client = make_h2_pair()
+        sid = client.get_next_available_stream_id()
+        client.send_headers(sid, [
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":authority", "example.com"),
+        ], end_stream=True)
+        data = client.data_to_send()
+        _, requests, _, _ = server.receive(data, client=CLIENT_ADDR)
+        assert requests[0].h2 is not None
+        assert requests[0].h2.stream_id == sid
+
+    def test_h2info_connection_id_is_8_bytes(self):
+        """connection_id must be a random 8-byte identifier."""
+        server, client = make_h2_pair()
+        sid = client.get_next_available_stream_id()
+        client.send_headers(sid, [
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":authority", "example.com"),
+        ], end_stream=True)
+        data = client.data_to_send()
+        _, requests, _, _ = server.receive(data, client=CLIENT_ADDR)
+        assert isinstance(requests[0].h2.connection_id, bytes)
+        assert len(requests[0].h2.connection_id) == 8
+
+    def testCLIENT_ADDRess_stored(self):
+        """The client address passed to receive() must appear on the Request."""
+        server, client = make_h2_pair()
+        sid = client.get_next_available_stream_id()
+        client.send_headers(sid, [
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":authority", "example.com"),
+        ], end_stream=True)
+        data = client.data_to_send()
+        addr = (ipaddress.IPv4Address("10.0.0.1"), 5000)
+        _, requests, _, _ = server.receive(data, client=addr)
+        assert requests[0].client == addr
+
+    def test_authority_becomes_host_header(self):
+        """RFC 9113 §8.3.1: :authority must be mapped to the Host header."""
+        server, client = make_h2_pair()
+        sid = client.get_next_available_stream_id()
+        client.send_headers(sid, [
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":authority", "api.example.com"),
+        ], end_stream=True)
+        data = client.data_to_send()
+        _, requests, _, _ = server.receive(data, client=CLIENT_ADDR)
+        assert requests[0].headers.get("host") == "api.example.com"
+
+    def test_multiple_requests_in_single_receive(self):
+        """Multiple streams may be completed in a single receive() call."""
+        server, client = make_h2_pair()
+        for _ in range(3):
+            sid = client.get_next_available_stream_id()
+            client.send_headers(sid, [
+                (":method", "GET"),
+                (":scheme", "https"),
+                (":path", "/"),
+                (":authority", "example.com"),
+            ], end_stream=True)
+        data = client.data_to_send()
+        _, requests, _, _ = server.receive(data, client=CLIENT_ADDR)
+        assert len(requests) == 3
+
+def make_h2_pair_forbidden_headers():
+    """Like make_h2_pair() but both sides skip header validation so that
+    connection-specific (forbidden) headers can pass through the h2 library
+    and reach Kaede's own forbidden-header detection code."""
+    mock = MockProtocol()
+    server = H2Connection(mock, is_client=False)
+
+    # Replace the internal h2 connection with one that does not validate inbound
+    # headers — this lets Kaede's own check (not the h2 library) handle them.
+    server.connection = h2.connection.H2Connection(
+        config=h2.config.H2Configuration(
+            client_side=False,
+            header_encoding="utf-8",
+            validate_inbound_headers=False,
+        )
+    )
+    server_preface = server.initiate()
+
+    client = h2.connection.H2Connection(
+        config=h2.config.H2Configuration(
+            client_side=True,
+            header_encoding="utf-8",
+            validate_outbound_headers=False,
+            normalize_outbound_headers=False,
+        )
+    )
+    client.initiate_connection()
+    client_preface = client.data_to_send()
+
+    out, _, _, _ = server.receive(client_preface, client=CLIENT_ADDR)
+    client.receive_data(server_preface)
+    if out:
+        client.receive_data(out)
+    client_ack = client.data_to_send()
+    if client_ack:
+        server.receive(client_ack, client=CLIENT_ADDR)
+
+    return server, client
+
+class TestH2ReceiveForbiddenHeaders:
+    """RFC 9113 §8.2.2: Requests with forbidden headers must be reset."""
+
+    @pytest.mark.parametrize("header", ["connection", "transfer-encoding", "keep-alive"])
+    def test_forbidden_header_resets_stream(self, header):
+        """A stream that carries a forbidden HTTP/2 header must be reset; no request yielded."""
+        server, client = make_h2_pair_forbidden_headers()
+        sid = client.get_next_available_stream_id()
+        try:
+            client.send_headers(sid, [
+                (":method", "GET"),
+                (":scheme", "https"),
+                (":path", "/"),
+                (":authority", "example.com"),
+                (header, "value"),
+            ], end_stream=True)
+        except Exception:
+            pytest.skip(f"h2 client refused to send '{header}' even with validation disabled")
+
+        data = client.data_to_send()
+        _, requests, _, _ = server.receive(data, client=CLIENT_ADDR)
+        assert len(requests) == 0
+
+class TestH2ContentLengthMismatch:
+    """RFC 9113 §8.1.1: Content-Length must match actual body size."""
+
+    def test_content_length_mismatch_returns_none(self):
+        """A request whose body size doesn't match content-length must be reset."""
+        mock = MockProtocol()
+        server = H2Connection(mock, is_client=False)
+
+        raw = RawRequest(scheme="https")
+        raw.method = "POST"
+        raw.target = "/"
+        raw.headers.append("host", "example.com")
+        raw.headers.append("content-length", "10")
+        raw.body.extend(b"hello")  # 5 bytes; content-length says 10
+
+        server.request_streams[1] = raw
+        result = server.finalize_request(1, CLIENT_ADDR, True, None)
+        assert result is None
+
+    def test_matching_content_length_returns_request(self):
+        """A correct content-length must not prevent the request from being returned."""
+        mock = MockProtocol()
+        server = H2Connection(mock, is_client=False)
+
+        raw = RawRequest(scheme="https")
+        raw.method = "POST"
+        raw.target = "/"
+        raw.headers.append("host", "example.com")
+        raw.headers.append("content-length", "5")
+        raw.body.extend(b"hello")  # 5 bytes matches
+
+        server.request_streams[1] = raw
+        result = server.finalize_request(1, CLIENT_ADDR, True, None)
+        assert result is not None
+        assert result.body == b"hello"
+
+    def test_no_content_length_header_accepted(self):
+        """Requests without content-length must not be rejected on body size."""
+        mock = MockProtocol()
+        server = H2Connection(mock, is_client=False)
+
+        raw = RawRequest(scheme="https")
+        raw.method = "POST"
+        raw.target = "/"
+        raw.headers.append("host", "example.com")
+        raw.body.extend(b"hello")
+
+        server.request_streams[1] = raw
+        result = server.finalize_request(1, CLIENT_ADDR, True, None)
+        assert result is not None
+
+class TestH2ExtendedConnect:
+    """RFC 8441: Extended CONNECT (WebSocket over HTTP/2)."""
+
+    def test_extended_connect_added_to_ws_upgrades(self):
+        """CONNECT with :protocol=websocket must produce a websocket upgrade, not a plain request."""
+        server, client = make_h2_pair()
+        sid = client.get_next_available_stream_id()
+        try:
+            client.send_headers(sid, [
+                (":method", "CONNECT"),
+                (":protocol", "websocket"),
+                (":scheme", "https"),
+                (":path", "/ws"),
+                (":authority", "example.com"),
+                ("sec-websocket-version", "13"),
+            ], end_stream=False)
+        except Exception:
+            pytest.skip("h2 client does not support :protocol pseudo-header for extended CONNECT")
+
+        data = client.data_to_send()
+        _, requests, websocket_upgrades, _ = server.receive(data, client=CLIENT_ADDR)
+        assert len(websocket_upgrades) == 1
+        assert len(requests) == 0
+        assert websocket_upgrades[0].stream_id == sid

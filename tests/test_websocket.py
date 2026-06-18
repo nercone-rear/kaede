@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 import struct
 import base64
+import asyncio
 
 from kaede.websocket import WebSocket, WebSocketProtocolError, PerMessageDeflate, Opcode, build_frame, parse_frames, compute_accept, check_accept, generate_key
 
@@ -570,3 +571,359 @@ class TestPerMessageDeflate:
         assert not transport.closed
         msg = ws.queue.get_nowait()
         assert msg == b"hello world"
+
+# RFC 6455 §5.2 / §5.6: WebSocket.send() — outgoing frames
+
+class TestWebSocketSend:
+    """RFC 6455 §5.6: send() must emit the correct opcode and payload."""
+
+    def test_bytes_sends_binary_frame(self):
+        """RFC 6455 §5.6: A binary message must use the BINARY opcode (0x2)."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.send(b"hello")
+            frames = parse_written(transport)
+            assert any(f.opcode == Opcode.BINARY for f in frames)
+        asyncio.run(go())
+
+    def test_str_sends_text_frame(self):
+        """RFC 6455 §5.6: A text message must use the TEXT opcode (0x1)."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.send("hello")
+            frames = parse_written(transport)
+            assert any(f.opcode == Opcode.TEXT for f in frames)
+        asyncio.run(go())
+
+    def test_binary_payload_preserved(self):
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            data = b"\x00\x01\x02\x03"
+            await ws.send(data)
+            frames = parse_written(transport)
+            binary = next(f for f in frames if f.opcode == Opcode.BINARY)
+            assert binary.payload == data
+        asyncio.run(go())
+
+    def test_str_encoded_as_utf8(self):
+        """RFC 6455 §5.6: Text messages must be encoded as UTF-8."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            text = "こんにちは"
+            await ws.send(text)
+            frames = parse_written(transport)
+            txt = next(f for f in frames if f.opcode == Opcode.TEXT)
+            assert txt.payload == text.encode("utf-8")
+        asyncio.run(go())
+
+    def test_closed_ws_sends_nothing(self):
+        """RFC 6455 §1.4: After closing, no further messages must be sent."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            ws.closed = True
+            await ws.send(b"ignored")
+            assert len(transport.written) == 0
+        asyncio.run(go())
+
+    def test_binary_with_deflate_sets_rsv1(self):
+        """RFC 7692 §7.2.1: Compressed messages must have RSV1=1."""
+        async def go():
+            deflate = PerMessageDeflate(server_no_context_takeover=True)
+            ws, transport = make_ws(require_masking=False, deflate=deflate)
+            await ws.send(b"hello world" * 10)
+            frames = parse_written(transport)
+            binary = next(f for f in frames if f.opcode == Opcode.BINARY)
+            assert binary.rsv1 is True
+        asyncio.run(go())
+
+    def test_text_with_deflate_sets_rsv1(self):
+        """RFC 7692 §7.2.1: Compressed text messages must have RSV1=1."""
+        async def go():
+            deflate = PerMessageDeflate(server_no_context_takeover=True)
+            ws, transport = make_ws(require_masking=False, deflate=deflate)
+            await ws.send("hello world" * 10)
+            frames = parse_written(transport)
+            txt = next(f for f in frames if f.opcode == Opcode.TEXT)
+            assert txt.rsv1 is True
+        asyncio.run(go())
+
+    def test_without_deflate_rsv1_is_false(self):
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.send(b"hello")
+            frames = parse_written(transport)
+            binary = next(f for f in frames if f.opcode == Opcode.BINARY)
+            assert binary.rsv1 is False
+        asyncio.run(go())
+
+    def test_mask_frames_true_sends_masked(self):
+        """RFC 6455 §5.1: Client-to-server frames must be masked."""
+        async def go():
+            ws, transport = make_ws(require_masking=False, mask_frames=True)
+            await ws.send(b"hello")
+            raw = bytes(transport.written)
+            assert raw[1] & 0x80  # MASK bit set
+        asyncio.run(go())
+
+    def test_mask_frames_false_sends_unmasked(self):
+        async def go():
+            ws, transport = make_ws(require_masking=False, mask_frames=False)
+            await ws.send(b"hello")
+            raw = bytes(transport.written)
+            assert not (raw[1] & 0x80)  # MASK bit clear
+        asyncio.run(go())
+
+# RFC 6455 §5.5.1: WebSocket.close() — initiate close handshake
+
+class TestWebSocketClose:
+    def test_default_close_code_1000(self):
+        """RFC 6455 §7.4.1: 1000 indicates a normal closure."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.close()
+            frames = parse_written(transport)
+            close = next(f for f in frames if f.opcode == Opcode.CLOSE)
+            code = struct.unpack(">H", close.payload[:2])[0]
+            assert code == 1000
+        asyncio.run(go())
+
+    def test_custom_close_code_in_frame(self):
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.close(code=1001)
+            frames = parse_written(transport)
+            close = next(f for f in frames if f.opcode == Opcode.CLOSE)
+            code = struct.unpack(">H", close.payload[:2])[0]
+            assert code == 1001
+        asyncio.run(go())
+
+    def test_close_reason_encoded_as_utf8(self):
+        """RFC 6455 §5.5.1: Close frame payload is code (2 bytes) + UTF-8 reason."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.close(code=1000, reason="bye")
+            frames = parse_written(transport)
+            close = next(f for f in frames if f.opcode == Opcode.CLOSE)
+            assert close.payload[2:] == b"bye"
+        asyncio.run(go())
+
+    def test_sets_closed_flag(self):
+        async def go():
+            ws, _ = make_ws(require_masking=False)
+            assert not ws.closed
+            await ws.close()
+            assert ws.closed
+        asyncio.run(go())
+
+    def test_already_closed_sends_nothing(self):
+        """RFC 6455 §7.1.3: If already closed, must not send another close frame."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            ws.closed = True
+            await ws.close()
+            assert len(transport.written) == 0
+        asyncio.run(go())
+
+    def test_close_frame_has_fin_bit(self):
+        """RFC 6455 §5.5: Control frames MUST have the FIN bit set."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.close()
+            raw = bytes(transport.written)
+            assert raw[0] & 0x80  # FIN bit
+        asyncio.run(go())
+
+# RFC 6455 §5.5.2: WebSocket.ping() — keepalive
+
+class TestWebSocketPing:
+    def test_sends_ping_opcode(self):
+        """RFC 6455 §5.5.2: Ping frame must use opcode 0x9."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.ping()
+            frames = parse_written(transport)
+            assert any(f.opcode == Opcode.PING for f in frames)
+        asyncio.run(go())
+
+    def test_ping_with_payload(self):
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.ping(b"heartbeat")
+            frames = parse_written(transport)
+            ping = next(f for f in frames if f.opcode == Opcode.PING)
+            assert ping.payload == b"heartbeat"
+        asyncio.run(go())
+
+    def test_closed_ws_sends_no_ping(self):
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            ws.closed = True
+            await ws.ping()
+            assert len(transport.written) == 0
+        asyncio.run(go())
+
+    def test_ping_frame_has_fin_bit(self):
+        """RFC 6455 §5.5: Control frames MUST have FIN bit set."""
+        async def go():
+            ws, transport = make_ws(require_masking=False)
+            await ws.ping(b"test")
+            raw = bytes(transport.written)
+            assert raw[0] & 0x80
+        asyncio.run(go())
+
+# RFC 6455 §5.6: WebSocket.receive() — reading incoming messages
+
+class TestWebSocketReceive:
+    def test_returns_queued_message(self):
+        """RFC 6455 §5.6: receive() returns the next available message."""
+        async def go():
+            ws, _ = make_ws(require_masking=False)
+            ws.queue.put_nowait(b"hello")
+            msg = await ws.receive()
+            assert msg == b"hello"
+        asyncio.run(go())
+
+    def test_returns_none_when_queue_ended(self):
+        """None signals end of the WebSocket stream."""
+        async def go():
+            ws, _ = make_ws(require_masking=False)
+            ws.queue.put_nowait(None)
+            msg = await ws.receive()
+            assert msg is None
+        asyncio.run(go())
+
+    def test_messages_returned_in_order(self):
+        """RFC 6455 §5.6: Messages MUST be delivered in the order received."""
+        async def go():
+            ws, _ = make_ws(require_masking=False)
+            ws.queue.put_nowait(b"first")
+            ws.queue.put_nowait(b"second")
+            ws.queue.put_nowait(b"third")
+            assert await ws.receive() == b"first"
+            assert await ws.receive() == b"second"
+            assert await ws.receive() == b"third"
+        asyncio.run(go())
+
+# RFC 7692 §7.2.2: WebSocket.decompress()
+
+class TestWebSocketDecompress:
+    def test_rsv1_with_deflate_decompresses_payload(self):
+        """RFC 7692 §7.2.2: RSV1=1 with permessage-deflate triggers decompression."""
+        deflate = PerMessageDeflate(server_no_context_takeover=True)
+        ws, _ = make_ws(require_masking=False, deflate=deflate)
+        original = b"hello world"
+        compressed = deflate.compress(original)
+        result = ws.decompress(compressed, rsv1=True)
+        assert result == original
+
+    def test_rsv1_without_deflate_returns_raw(self):
+        """If deflate is not negotiated, RSV1 must not trigger decompression."""
+        ws, _ = make_ws(require_masking=False, deflate=None)
+        data = b"raw bytes"
+        result = ws.decompress(data, rsv1=True)
+        assert result is data
+
+    def test_no_rsv1_returns_raw(self):
+        """RSV1=0 always returns the payload as-is."""
+        deflate = PerMessageDeflate(server_no_context_takeover=True)
+        ws, _ = make_ws(require_masking=False, deflate=deflate)
+        data = b"uncompressed"
+        result = ws.decompress(data, rsv1=False)
+        assert result is data
+
+# RFC 7692 §7.1.1.1: permessage-deflate context takeover
+
+class TestPerMessageDeflateContextTakeover:
+    def test_no_context_takeover_uses_fresh_context_each_time(self):
+        """RFC 7692 §7.1.1.1: server_no_context_takeover=True must not reuse state."""
+        deflate = PerMessageDeflate(server_no_context_takeover=True)
+        data = b"repeated pattern " * 10
+        c1 = deflate.compress(data)
+        c2 = deflate.compress(data)
+
+        # Each compressed message must be independently decompressible
+        d1 = PerMessageDeflate(client_no_context_takeover=True)
+        assert d1.decompress(c1) == data
+
+        d2 = PerMessageDeflate(client_no_context_takeover=True)
+        assert d2.decompress(c2) == data
+
+    def test_with_context_takeover_preserves_compress_context(self):
+        """RFC 7692 §7.1.1.1: server_no_context_takeover=False must reuse context."""
+        deflate = PerMessageDeflate(server_no_context_takeover=False)
+        data = b"repeated pattern " * 10
+        deflate.compress(data)
+        assert deflate.compress_context is not None  # context was created and kept
+
+    def test_context_takeover_output_decompresses_correctly(self):
+        deflate = PerMessageDeflate(server_no_context_takeover=False)
+        data = b"hello hello hello" * 20
+        c1 = deflate.compress(data)
+        c2 = deflate.compress(data)
+        d = PerMessageDeflate(client_no_context_takeover=False)
+        assert d.decompress(c1) == data
+        assert d.decompress(c2) == data
+
+# RFC 7692 §7.1.2: permessage-deflate decompress max_size
+
+class TestPerMessageDeflateMaxSize:
+    def test_exceeds_max_size_raises_value_error(self):
+        """RFC 7692: decompressed size exceeding max must raise ValueError."""
+        deflate = PerMessageDeflate()
+        data = b"x" * 1000
+        compressed = deflate.compress(data)
+        with pytest.raises(ValueError):
+            PerMessageDeflate().decompress(compressed, max_size=100)
+
+    def test_exactly_at_max_size_succeeds(self):
+        deflate = PerMessageDeflate()
+        data = b"x" * 100
+        compressed = deflate.compress(data)
+        result = PerMessageDeflate().decompress(compressed, max_size=100)
+        assert result == data
+
+    def test_no_max_size_succeeds(self):
+        deflate = PerMessageDeflate()
+        data = b"x" * 10000
+        compressed = deflate.compress(data)
+        result = PerMessageDeflate().decompress(compressed, max_size=None)
+        assert result == data
+
+# RFC 7692 §7.1.1: permessage-deflate response_header()
+
+class TestPerMessageDeflateResponseHeader:
+    def test_starts_with_extension_name(self):
+        assert PerMessageDeflate().response_header().startswith("permessage-deflate")
+
+    def test_semicolon_separates_parameters(self):
+        d = PerMessageDeflate(server_no_context_takeover=True, client_no_context_takeover=True)
+        header = d.response_header()
+        parts = header.split("; ")
+        assert len(parts) >= 2
+
+    def test_non_default_server_window_bits_included(self):
+        """Non-default window bits must be advertised explicitly."""
+        d = PerMessageDeflate(server_max_window_bits=10)
+        assert "server_max_window_bits=10" in d.response_header()
+
+    def test_non_default_client_window_bits_included(self):
+        d = PerMessageDeflate(client_max_window_bits=12)
+        assert "client_max_window_bits=12" in d.response_header()
+
+    def test_default_window_bits_not_advertised(self):
+        """Window bits==15 is the default and must not appear in the header."""
+        d = PerMessageDeflate(
+            server_no_context_takeover=False,
+            client_no_context_takeover=False,
+            server_max_window_bits=15,
+            client_max_window_bits=15,
+        )
+        assert "window_bits" not in d.response_header()
+
+    def test_client_no_context_takeover_included_when_set(self):
+        d = PerMessageDeflate(client_no_context_takeover=True)
+        assert "client_no_context_takeover" in d.response_header()
+
+    def test_client_no_context_takeover_absent_when_false(self):
+        d = PerMessageDeflate(server_no_context_takeover=False, client_no_context_takeover=False)
+        assert "client_no_context_takeover" not in d.response_header()

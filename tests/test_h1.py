@@ -711,3 +711,121 @@ class TestBuildRequestEdgeCases:
         )
         result = H1.build_request_head(req)
         assert b"content-type: application/json\r\n" in result
+
+# RFC 9112 §6: build_response return type
+
+class TestBuildResponse:
+    def test_bytes_body_returns_single_bytes(self):
+        """If has_real_body is True, build_response must return a single bytes object."""
+        response = Response(body=b"hello", status_code=200)
+        result = H1.build_response(response)
+        assert isinstance(result, bytes)
+        assert result.endswith(b"hello")
+
+    def test_bytes_body_contains_head_and_body(self):
+        response = Response(body=b"world", status_code=200)
+        result = H1.build_response(response)
+        assert b"HTTP/1.1 200" in result
+        assert b"world" in result
+
+    def test_none_body_returns_tuple_with_none(self):
+        """None body (no content): must return (head_bytes, None)."""
+        response = Response(body=None, status_code=204)
+        result = H1.build_response(response)
+        assert isinstance(result, tuple)
+        head, path = result
+        assert isinstance(head, bytes)
+        assert path is None
+
+    def test_path_body_returns_tuple_with_path(self):
+        """PathLike body (file send): must return (head_bytes, path)."""
+        import pathlib
+        p = pathlib.Path("/tmp/file.bin")
+        response = Response(body=p, status_code=200)
+        result = H1.build_response(response)
+        assert isinstance(result, tuple)
+        head, alt = result
+        assert isinstance(head, bytes)
+        assert alt is p
+
+    def test_head_in_tuple_ends_with_crlf_crlf(self):
+        response = Response(body=None, status_code=204)
+        head, _ = H1.build_response(response)
+        assert head.endswith(b"\r\n\r\n")
+
+# RFC 9112 §7.1: decode_chunked — direct invocation
+
+class TestDecodeChunkedDirect:
+    def test_complete_single_chunk(self):
+        """A single chunked body must be decoded correctly."""
+        body = H1.decode_chunked(b"5\r\nhello\r\n0\r\n\r\n")
+        assert body == b"hello"
+
+    def test_multiple_chunks_concatenated(self):
+        body = H1.decode_chunked(b"3\r\nabc\r\n4\r\ndefg\r\n0\r\n\r\n")
+        assert body == b"abcdefg"
+
+    def test_empty_body_returns_none(self):
+        """Zero-length chunked body must return None (no content)."""
+        body = H1.decode_chunked(b"0\r\n\r\n")
+        assert body is None
+
+    def test_incomplete_data_raises_value_error(self):
+        """Incomplete chunked body must raise ValueError."""
+        with pytest.raises(ValueError):
+            H1.decode_chunked(b"5\r\nhell")  # truncated – no CRLF + terminal chunk
+
+    def test_chunk_with_extension_ignored(self):
+        """RFC 9112 §7.1.1: chunk extensions after ';' must be ignored."""
+        body = H1.decode_chunked(b"5;ext=ignored\r\nhello\r\n0\r\n\r\n")
+        assert body == b"hello"
+
+    def test_max_body_size_enforced(self):
+        with pytest.raises(ValueError):
+            H1.decode_chunked(b"a\r\n" + b"x" * 10 + b"\r\n0\r\n\r\n", max_body_size=5)
+
+    def test_missing_chunk_crlf_terminator_raises(self):
+        """RFC 9112 §7.1: each chunk must end with CRLF."""
+        with pytest.raises(ValueError):
+            H1.decode_chunked(b"5\r\nhelloxx0\r\n\r\n")
+
+# RFC 9112 §4: parse_response_head edge cases
+
+class TestParseResponseHeadEdgeCases:
+    def test_http10_rejected(self):
+        """RFC 9112 §2.5: HTTP/1.0 is not supported; must raise ValueError."""
+        with pytest.raises(ValueError):
+            H1.parse_response_head(b"HTTP/1.0 200 OK")
+
+    def test_http20_rejected(self):
+        """HTTP/2.0 version on an HTTP/1.1 parser must raise ValueError."""
+        with pytest.raises(ValueError):
+            H1.parse_response_head(b"HTTP/2.0 200 OK")
+
+    def test_too_few_parts_raises(self):
+        """Status line with only one token must raise ValueError."""
+        with pytest.raises(ValueError):
+            H1.parse_response_head(b"HTTP/1.1")
+
+    def test_empty_reason_phrase_accepted(self):
+        """RFC 9112 §4: The reason phrase MAY be empty."""
+        status, phrase, _ = H1.parse_response_head(b"HTTP/1.1 200 ")
+        assert status == 200
+        assert isinstance(phrase, str)
+
+    def test_non_numeric_status_raises(self):
+        """RFC 9112 §4: status-code MUST be three decimal digits."""
+        with pytest.raises(ValueError):
+            H1.parse_response_head(b"HTTP/1.1 OK 200")
+
+    def test_two_digit_status_raises(self):
+        """RFC 9112 §4: status-code must be exactly three digits."""
+        with pytest.raises(ValueError):
+            H1.parse_response_head(b"HTTP/1.1 20 OK")
+
+    def test_valid_response_parses_headers(self):
+        status, _, headers = H1.parse_response_head(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Custom: val"
+        )
+        assert status == 200
+        assert headers.get("Content-Type") == "text/html"
