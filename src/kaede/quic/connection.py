@@ -153,6 +153,7 @@ class QUICConnection:
             TP_ACTIVE_CONNECTION_ID_LIMIT: 2,
             TP_INITIAL_SCID: local_cid,
             TP_MAX_IDLE_TIMEOUT: 30000,
+            TP_MAX_UDP_PAYLOAD: MAX_DATAGRAM_SIZE
         }
 
         if local_tp_extra:
@@ -181,6 +182,7 @@ class QUICConnection:
             TP_INITIAL_MAX_STREAMS_UNI: DEFAULT_MAX_STREAMS,
             TP_ACTIVE_CONNECTION_ID_LIMIT: 2,
             TP_MAX_IDLE_TIMEOUT: 30000,
+            TP_MAX_UDP_PAYLOAD: MAX_DATAGRAM_SIZE
         }
 
         if local_tp_extra:
@@ -277,10 +279,7 @@ class QUICConnection:
             if not self.is_client:
                 self.handshake_done_pending = True
                 self.handshake_confirmed = True
-                self.send_keys.pop(LEVEL_INITIAL, None)
-                self.recv_keys.pop(LEVEL_INITIAL, None)
-                self.send_keys.pop(LEVEL_HANDSHAKE, None)
-                self.recv_keys.pop(LEVEL_HANDSHAKE, None)
+
             self._events.append(HandshakeCompleted(self.tls.alpn()))
 
     def receive_datagram(self, data: bytes, now: float):
@@ -452,8 +451,16 @@ class QUICConnection:
                     self.tls.provide_crypto(level, chunk)
 
             elif ftype is frames.Ack:
-                acked, lost = self.recovery.on_ack_received(space, f.largest, f.delay, f.ranges, now)
+                ack_delay_exp = int(self.peer_transport_params.get(TP_ACK_DELAY_EXPONENT, 3) or 3) if self.peer_transport_params else 3
+                ack_delay_seconds = f.delay * (2 ** ack_delay_exp) / 1_000_000
+
+                acked, lost = self.recovery.on_ack_received(space, f.largest, ack_delay_seconds, f.ranges, now)
                 self.on_lost(lost)
+
+                if not self.is_client and self.handshake_complete and level == LEVEL_APPLICATION:
+                    if LEVEL_HANDSHAKE in self.send_keys or LEVEL_HANDSHAKE in self.recv_keys:
+                        self.send_keys.pop(LEVEL_HANDSHAKE, None)
+                        self.recv_keys.pop(LEVEL_HANDSHAKE, None)
 
             elif ftype is frames.Stream:
                 self.on_stream_frame(f)
@@ -489,6 +496,12 @@ class QUICConnection:
                     self.max_bidi_streams = max(self.max_bidi_streams or 0, f.maximum)
                 else:
                     self.max_uni_streams = max(self.max_uni_streams or 0, f.maximum)
+
+            elif ftype is frames.NewConnectionId:
+                pass
+
+            elif ftype is frames.RetireConnectionId:
+                pass
 
             elif ftype is frames.HandshakeDone:
                 if level != LEVEL_APPLICATION:
@@ -688,6 +701,11 @@ class QUICConnection:
         self.apply_header_protection(buf, pn_offset, pn_len, keys, long_header=(level != LEVEL_APPLICATION))
 
         self.recovery.on_packet_sent(SentPacket(pn, space, now, ack_eliciting, ack_eliciting, len(buf), sent_frames))
+
+        if level == LEVEL_HANDSHAKE and LEVEL_INITIAL in self.send_keys:
+            self.send_keys.pop(LEVEL_INITIAL, None)
+            self.recv_keys.pop(LEVEL_INITIAL, None)
+
         return bytes(buf)
 
     def apply_header_protection(self, buf: bytearray, pn_offset: int, pn_len: int, keys: PacketKeys, long_header: bool):

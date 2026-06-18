@@ -295,9 +295,19 @@ class WebSocket:
 
             if frame.fin:
                 try:
-                    self.queue.put_nowait(self.decompress(frame.payload, frame.rsv1))
+                    payload = self.decompress(frame.payload, frame.rsv1)
                 except ValueError:
                     self.close_transport(1009)
+                    return
+
+                if frame.opcode == Opcode.TEXT:
+                    try:
+                        payload.decode("utf-8")
+                    except UnicodeDecodeError:
+                        self.close_transport(1007)
+                        return
+
+                self.queue.put_nowait(payload)
 
             else:
                 if self.max_message_size is not None and len(frame.payload) > self.max_message_size:
@@ -324,10 +334,19 @@ class WebSocket:
 
             if frame.fin:
                 try:
-                    self.queue.put_nowait(self.decompress(bytes(self.fragments), self.fragment_rsv1))
+                    payload = self.decompress(bytes(self.fragments), self.fragment_rsv1)
                 except ValueError:
                     self.close_transport(1009)
                     return
+
+                if self.fragment_opcode == Opcode.TEXT:
+                    try:
+                        payload.decode("utf-8")
+                    except UnicodeDecodeError:
+                        self.close_transport(1007)
+                        return
+
+                self.queue.put_nowait(payload)
 
                 self.fragments = bytearray()
                 self.fragment_opcode = None

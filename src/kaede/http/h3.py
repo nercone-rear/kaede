@@ -248,8 +248,13 @@ class H3Connection:
                     self.quic.close(0x0200, "QPACK decompression failed")
                     return
                 out.append(HeadersReceived(sid, headers, stream_ended=False))
+
             elif frame_type == FRAME_DATA:
                 out.append(DataReceived(sid, payload, stream_ended=False))
+
+            elif frame_type in (0x2, 0x6, 0x8, 0x9):
+                self.quic.close(0x0105, "H3_FRAME_UNEXPECTED")
+                return
 
         if end_stream and sid not in self.finished:
             self.finished.add(sid)
@@ -347,10 +352,10 @@ class H3Connection:
         self.handler.create_task(self.respond(request))
 
     def build_request(self, stream_id: int, asm: RequestAssembler) -> Request | None:
-        method = "GET"
-        target = "/"
+        method: str | None = None
+        target: str | None = None
         authority = ""
-        scheme = "https"
+        scheme: str | None = None
         headers = Headers({})
 
         for nameb, valueb in asm.headers:
@@ -376,9 +381,16 @@ class H3Connection:
         if method not in ("GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"):
             return None
 
+        if method == "CONNECT":
+            if not authority:
+                return None
+        else:
+            if not method or not target or scheme not in ("http", "https"):
+                return None
+
         body = bytes(asm.body) if asm.body else None
 
-        return Request(client=self.client, scheme=scheme, secure=True, protocol="HTTP/3.0", method=method, target=target, headers=headers, body=body, h2=None, h3=H3Info(connection_id=self.quic.local_cid, stream_id=stream_id), tls=self.tls)
+        return Request(client=self.client, scheme=scheme, secure=True, protocol="HTTP/3.0", method=method, target=target or "/", headers=headers, body=body, h2=None, h3=H3Info(connection_id=self.quic.local_cid, stream_id=stream_id), tls=self.tls)
 
     async def respond(self, request: Request):
         if request.h3 is None:
@@ -533,6 +545,14 @@ class H3Connection:
         if self.timer is not None:
             self.timer.cancel()
             self.timer = None
+
+        if self.control_stream_id is not None:
+            try:
+                goaway_payload = encode_uint_var(0)
+                self.quic.send_stream_data(self.control_stream_id, H3.encode_frame(FRAME_GOAWAY, goaway_payload), end_stream=False)
+                self.flush()
+            except Exception:
+                pass
 
         if self.protocol.transport is not None:
             self.protocol.transport.close()

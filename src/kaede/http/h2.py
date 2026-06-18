@@ -53,7 +53,7 @@ class H2:
         return headers
 
     @staticmethod
-    def build_request_headers(request: Request, authority: str) -> list[tuple[str, str]]:
+    def build_request_headers(request: Request, authority: str, body: bytes | None = None) -> list[tuple[str, str]]:
         headers: list[tuple[str, str]] = [
             (":method", request.method),
             (":scheme", request.scheme),
@@ -68,6 +68,9 @@ class H2:
             if any(c in lname for c in "\r\n\x00") or any(c in value for c in "\r\n\x00"):
                 continue
             headers.append((lname, value))
+
+        if body:
+            headers.append(("content-length", str(len(body))))
 
         return headers
 
@@ -241,7 +244,23 @@ class H2Connection:
                         pass
                     continue
 
-                if stream.method == "CONNECT" and websocket_protocol == "websocket":
+                is_extended_connect = stream.method == "CONNECT" and websocket_protocol == "websocket"
+                if stream.method == "CONNECT" and not is_extended_connect:
+                    if not stream.authority:
+                        try:
+                            self.connection.reset_stream(event.stream_id, error_code=h2.errors.ErrorCodes.PROTOCOL_ERROR)
+                        except Exception:
+                            pass
+                        continue
+
+                elif not stream.method or not stream.target or stream.scheme not in ("http", "https"):
+                    try:
+                        self.connection.reset_stream(event.stream_id, error_code=h2.errors.ErrorCodes.PROTOCOL_ERROR)
+                    except Exception:
+                        pass
+                    continue
+
+                if is_extended_connect:
                     queue: asyncio.Queue[bytes | None] = asyncio.Queue()
                     self.websocket_streams[event.stream_id] = queue
                     request = Request(client=client, scheme=stream.scheme if stream.scheme in ("http", "https") else "https", secure=secure, protocol="HTTP/2.0", method="GET", target=stream.target, headers=stream.headers, body=None, h2=H2Info(connection_id=self.connection_id, stream_id=event.stream_id), h3=None, tls=tls)
@@ -250,7 +269,9 @@ class H2Connection:
 
                 self.request_streams[event.stream_id] = stream
                 if event.stream_ended:
-                    completed.append(self.finalize_request(event.stream_id, client, secure, tls))
+                    req = self.finalize_request(event.stream_id, client, secure, tls)
+                    if req is not None:
+                        completed.append(req)
 
             elif isinstance(event, h2.events.DataReceived):
                 if event.stream_id in self.websocket_streams:
@@ -279,7 +300,9 @@ class H2Connection:
                             pass
 
                     elif event.stream_ended and event.stream_id in self.request_streams:
-                        completed.append(self.finalize_request(event.stream_id, client, secure, tls))
+                        req = self.finalize_request(event.stream_id, client, secure, tls)
+                        if req is not None:
+                            completed.append(req)
 
             elif isinstance(event, h2.events.StreamEnded):
                 if event.stream_id in self.websocket_streams:
@@ -287,7 +310,9 @@ class H2Connection:
                     del self.websocket_streams[event.stream_id]
 
                 elif event.stream_id in self.request_streams:
-                    completed.append(self.finalize_request(event.stream_id, client, secure, tls))
+                    req = self.finalize_request(event.stream_id, client, secure, tls)
+                    if req is not None:
+                        completed.append(req)
 
             elif isinstance(event, h2.events.StreamReset):
                 now = asyncio.get_running_loop().time()
@@ -392,9 +417,22 @@ class H2Connection:
         buf = self.send_buffers.get(stream_id)
         return len(buf) if buf else 0
 
-    def finalize_request(self, stream_id: int, client: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int], secure: bool, tls: TLSInfo | None) -> Request:
+    def finalize_request(self, stream_id: int, client: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int], secure: bool, tls: TLSInfo | None) -> Request | None:
         stream = self.request_streams.pop(stream_id)
         body = bytes(stream.body) if stream.body else None
+
+        content_length_hdr = stream.headers.get("content-length")
+        if content_length_hdr is not None:
+            try:
+                if int(content_length_hdr) != (len(body) if body else 0):
+                    try:
+                        self.connection.reset_stream(stream_id, error_code=h2.errors.ErrorCodes.PROTOCOL_ERROR)
+                    except Exception:
+                        pass
+                    return None
+            except ValueError:
+                pass
+
         return Request(client=client, scheme=stream.scheme if stream.scheme in ("http", "https") else "https", secure=secure, protocol="HTTP/2.0", method=stream.method, target=stream.target, headers=stream.headers, body=body, h2=H2Info(connection_id=self.connection_id, stream_id=stream_id), h3=None, tls=tls)
 
     def send_response(self, stream_id: int, response: Response) -> tuple[bytes, os.PathLike | None]:
@@ -452,7 +490,7 @@ class H2Connection:
 
     def send_request(self, request: Request, authority: str) -> tuple[int, bytes]:
         stream_id = self.connection.get_next_available_stream_id()
-        headers = H2.build_request_headers(request, authority)
+        headers = H2.build_request_headers(request, authority, request.body)
         has_body = bool(request.body)
 
         self.connection.send_headers(stream_id, headers, end_stream=not has_body)

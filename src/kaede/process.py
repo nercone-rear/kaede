@@ -127,6 +127,20 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
             range_header = request.headers.get("Range", "")
             range_is_multi = range_header.startswith("bytes=") and "," in range_header[6:]
 
+            if range_header:
+                if_range = request.headers.get("If-Range", "").strip()
+
+                if if_range:
+                    etag = response.headers.get("ETag", "").strip()
+                    last_modified = response.headers.get("Last-Modified", "").strip()
+
+                    if if_range.startswith('"') or if_range.startswith("W/"):
+                        if if_range != etag:
+                            range_header = ""
+                    else:
+                        if if_range != last_modified:
+                            range_header = ""
+
             if (range_header and not range_is_multi and request.method in ("GET", "HEAD") and response.status_code == 200):
                 total = len(response.body)
                 parsed = parse_range(range_header, total)
@@ -157,7 +171,7 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
             response.headers.set("Content-Type", response.content_type or response.headers.get("Content-Type") or "application/octet-stream")
             response.headers.remove("Content-Length")
 
-            if request.protocol == "HTTP/1.1":
+            if request.protocol == "HTTP/1.1" and not (100 <= response.status_code < 200 or response.status_code in (204, 304)):
                 response.headers.set("Transfer-Encoding", "chunked")
 
         elif response.body is not None:
@@ -176,6 +190,20 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
 
             range_header = request.headers.get("Range", "")
             range_is_multi = range_header.startswith("bytes=") and "," in range_header[6:]
+
+            if range_header:
+                if_range = request.headers.get("If-Range", "").strip()
+
+                if if_range:
+                    etag = response.headers.get("ETag", "").strip()
+                    last_modified = response.headers.get("Last-Modified", "").strip()
+
+                    if if_range.startswith('"') or if_range.startswith("W/"):
+                        if if_range != etag:
+                            range_header = ""
+                    else:
+                        if if_range != last_modified:
+                            range_header = ""
 
             if (range_header and not range_is_multi and request.method in ("GET", "HEAD") and response.status_code == 200):
                 parsed = parse_range(range_header, total)

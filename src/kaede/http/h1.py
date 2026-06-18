@@ -46,7 +46,13 @@ class H1:
             if not sep_b:
                 raise ValueError(f"malformed HTTP/1.1 header: {line!r}")
 
-            headers.append(name_b.decode("latin-1").strip(), value_b.decode("latin-1").strip())
+            if name_b != name_b.rstrip(b" \t"):
+                raise ValueError("whitespace before colon in header field name")
+
+            headers.append(name_b.decode("latin-1"), value_b.decode("latin-1").strip())
+
+        if not headers.get("Host"):
+            raise ValueError("missing Host header in HTTP/1.1 request")
 
         body: bytes | None = None
         transfer_encoding = (headers.get("Transfer-Encoding") or "").lower()
@@ -152,7 +158,7 @@ class H1:
         if version_b != b"HTTP/1.1":
             raise ValueError(f"unsupported HTTP version: {version_b!r}")
 
-        if not (status_b.isascii() and status_b.isdigit()):
+        if not (len(status_b) == 3 and status_b.isascii() and status_b.isdigit()):
             raise ValueError(f"invalid HTTP status code: {status_b!r}")
 
         status = int(status_b)
@@ -170,7 +176,10 @@ class H1:
             if not sep_b:
                 raise ValueError(f"malformed HTTP/1.1 header: {line!r}")
 
-            headers.append(name_b.decode("latin-1").strip(), value_b.decode("latin-1").strip())
+            if name_b != name_b.rstrip(b" \t"):
+                raise ValueError("whitespace before colon in header field name")
+
+            headers.append(name_b.decode("latin-1"), value_b.decode("latin-1").strip())
 
         return status, phrase, headers
 
@@ -493,6 +502,7 @@ class H1Connection:
             try:
                 request = H1.parse_request(bytes(self.buffer[:consumed]), client=self.client, scheme="https" if self.secure else "http", secure=self.secure, tls=self.tls, max_body_size=self.config.max_body_size)
             except (ValueError, UnicodeDecodeError):
+                self.send_error(400, "Bad Request")
                 self.transport.close()
                 return
 
@@ -575,7 +585,20 @@ class H1Connection:
                 pass
 
         if response.is_streaming:
-            await self.stream(response)
+            if H1.response_has_no_body(response.status_code, request.method):
+                self.transport.write(H1.build_response_head(response))
+                if hasattr(response.body, "aclose"):
+                    try:
+                        await response.body.aclose()
+                    except Exception:
+                        pass
+
+                if not self.keep_alive:
+                    self.transport.close()
+
+            else:
+                await self.stream(response)
+
             return
 
         result = H1.build_response(response)

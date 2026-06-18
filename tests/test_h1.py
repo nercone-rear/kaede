@@ -21,6 +21,7 @@ class TestH1ParseRequest:
         body = b'{"key": "value"}'
         raw = (
             b"POST /api HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
             b"Content-Length: 16\r\n"
             b"Content-Type: application/json\r\n"
             b"\r\n" + body
@@ -32,6 +33,7 @@ class TestH1ParseRequest:
     def test_chunked_body(self):
         raw = (
             b"POST /upload HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
             b"Transfer-Encoding: chunked\r\n"
             b"\r\n"
             b"5\r\nhello\r\n"
@@ -44,6 +46,7 @@ class TestH1ParseRequest:
     def test_chunked_with_extension(self):
         raw = (
             b"POST / HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
             b"Transfer-Encoding: chunked\r\n"
             b"\r\n"
             b"5;ext=ignored\r\nhello\r\n"
@@ -53,7 +56,7 @@ class TestH1ParseRequest:
         assert req.body == b"hello"
 
     def test_empty_chunked_body(self):
-        raw = b"GET / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+        raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
         req = self._parse(raw)
         assert req.body is None
 
@@ -81,13 +84,14 @@ class TestH1ParseRequest:
 
     def test_max_body_size_enforced_content_length(self):
         body = b"x" * 100
-        raw = b"POST / HTTP/1.1\r\nContent-Length: 100\r\n\r\n" + body
+        raw = b"POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\n" + body
         with pytest.raises(ValueError, match="max_body_size"):
             self._parse(raw, max_body_size=50)
 
     def test_max_body_size_enforced_chunked(self):
         raw = (
             b"POST / HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
             b"Transfer-Encoding: chunked\r\n"
             b"\r\n"
             b"64\r\n" + b"x" * 100 + b"\r\n"
@@ -98,19 +102,19 @@ class TestH1ParseRequest:
 
     def test_tls_info_propagated(self):
         from kaede.tls import TLSInfo
-        raw = b"GET / HTTP/1.1\r\n\r\n"
+        raw = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
         tls = TLSInfo(version="TLSv1.3", group=None, cipher=None)
         req = self._parse(raw, tls=tls)
         assert req.tls is tls
 
     def test_scheme_propagated(self):
-        raw = b"GET / HTTP/1.1\r\n\r\n"
+        raw = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
         req = self._parse(raw, scheme="https", secure=True)
         assert req.scheme == "https"
         assert req.secure is True
 
     def test_multiple_headers_same_name(self):
-        raw = b"GET / HTTP/1.1\r\nAccept: text/html\r\nAccept: application/json\r\n\r\n"
+        raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nAccept: text/html\r\nAccept: application/json\r\n\r\n"
         req = self._parse(raw)
         assert "text/html" in req.headers.get("Accept")
         assert "application/json" in req.headers.get("Accept")
@@ -241,12 +245,12 @@ class TestH1ParseRequest2:
         return H1.parse_request(raw, client=CLIENT, **kwargs)
 
     def test_zero_content_length_body_is_none(self):
-        raw = b"POST / HTTP/1.1\r\nContent-Length: 0\r\n\r\n"
+        raw = b"POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"
         req = self._parse(raw)
         assert req.body is None
 
     def test_content_length_truncates_excess_data(self):
-        raw = b"POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nhelloXXXX"
+        raw = b"POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 3\r\n\r\nhelloXXXX"
         req = self._parse(raw)
         assert req.body == b"hel"
 
@@ -263,6 +267,7 @@ class TestH1ParseRequest2:
     def test_transfer_encoding_trailing_chunked_is_valid(self):
         raw = (
             b"POST / HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
             b"Transfer-Encoding: gzip, chunked\r\n"
             b"\r\n"
             b"5\r\nhello\r\n"
@@ -288,12 +293,12 @@ class TestH1ParseRequest2:
         assert req.target == "*"
 
     def test_target_with_query_string(self):
-        raw = b"GET /search?q=hello&lang=en HTTP/1.1\r\n\r\n"
+        raw = b"GET /search?q=hello&lang=en HTTP/1.1\r\nHost: example.com\r\n\r\n"
         req = self._parse(raw)
         assert req.target == "/search?q=hello&lang=en"
 
     def test_empty_header_value_allowed(self):
-        raw = b"GET / HTTP/1.1\r\nX-Empty: \r\n\r\n"
+        raw = b"GET / HTTP/1.1\r\nHost: example.com\r\nX-Empty: \r\n\r\n"
         req = self._parse(raw)
         assert req.headers.get("X-Empty") == ""
 
@@ -307,6 +312,7 @@ class TestH1ParseRequest2:
         chunk_data = b"x" * chunk_size
         raw = (
             b"POST / HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
             b"Transfer-Encoding: chunked\r\n"
             b"\r\n"
             + f"{chunk_size:x}\r\n".encode()
@@ -317,7 +323,7 @@ class TestH1ParseRequest2:
         assert req.body == chunk_data
 
     def test_ipv6_client_propagated(self):
-        raw = b"GET / HTTP/1.1\r\n\r\n"
+        raw = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
         addr = (ipaddress.IPv6Address("::1"), 9000)
         req = H1.parse_request(raw, client=addr)
         assert req.client == addr
