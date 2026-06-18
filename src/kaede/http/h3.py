@@ -12,7 +12,8 @@ from ..quic import QUICConnection, HandshakeCompleted, StreamDataReceived, Conne
 from ..quic.tls import QuicTLS, QuicTLSServerContext
 from ..quic.packet import Buffer, encode_uint_var, build_version_negotiation, parse_long_header
 from ..quic.stream import stream_is_bidirectional
-from ..handler.common import StreamState, consume_response
+from ..handler.common import StreamState, consume_response, negotiate_websocket
+from ..websocket import WebSocket, WebSocketProtocolError, parse_frames
 
 H3_FORBIDDEN_HEADERS = ("connection", "transfer-encoding", "keep-alive", "upgrade", "proxy-connection")
 
@@ -45,6 +46,22 @@ class H3Info:
 class H3WSUpgrade:
     stream_id: int
     request: object
+
+class H3WebSocketTransport:
+    """Adapts a WebSocket to an HTTP/3 request stream: WebSocket frames are
+    carried as the payload of HTTP/3 DATA frames (RFC 9220)."""
+
+    def __init__(self, conn: "H3Connection", stream_id: int):
+        self.conn = conn
+        self.stream_id = stream_id
+
+    def write(self, data: bytes):
+        self.conn.send_data(self.stream_id, data, end_stream=False)
+        self.conn.flush()
+
+    def close(self):
+        self.conn.send_data(self.stream_id, b"", end_stream=True)
+        self.conn.flush()
 
 @dataclass
 class HeadersReceived:
@@ -108,6 +125,29 @@ class H3:
             headers.append((lname.encode("ascii"), value.encode("utf-8")))
         return headers
 
+    @staticmethod
+    def build_websocket_connect_headers(request: Request, authority: str, subprotocols: list[str] | None = None) -> list[tuple[bytes, bytes]]:
+        # Extended CONNECT for WebSocket over HTTP/3 (RFC 9220 / RFC 8441 §5).
+        headers: list[tuple[bytes, bytes]] = [
+            (b":method", b"CONNECT"),
+            (b":protocol", b"websocket"),
+            (b":scheme", request.scheme.encode("ascii")),
+            (b":authority", authority.encode("ascii")),
+            (b":path", request.target.encode("utf-8")),
+            (b"sec-websocket-version", b"13"),
+        ]
+        if subprotocols:
+            headers.append((b"sec-websocket-protocol", ", ".join(subprotocols).encode("ascii")))
+
+        for name, value in request.headers.items():
+            lname = name.lower()
+            if lname in H3_FORBIDDEN_HEADERS or lname in ("host", "content-length") or lname.startswith("sec-websocket"):
+                continue
+            if any(c in lname for c in "\r\n\x00") or any(c in value for c in "\r\n\x00"):
+                continue
+            headers.append((lname.encode("ascii"), value.encode("utf-8")))
+        return headers
+
 class RequestAssembler:
     def __init__(self):
         self.headers: list[tuple[bytes, bytes]] | None = None
@@ -143,9 +183,12 @@ class H3Connection:
         self.tls = None
         self.assemblers: dict[int, RequestAssembler] = {}
         self.last_processed_stream_id: int = -1
+        # Extended-CONNECT WebSocket streams (RFC 9220): stream_id -> data queue.
+        self.websocket_streams: dict[int, asyncio.Queue] = {}
 
         # client state
         self.streams: dict[int, StreamState] = {}
+        self.websocket_pending: dict[int, asyncio.Future] = {}
         self.headers_seen: dict[int, bool] = {}
         self.multiplexed = True
         self.mode = "h3"
@@ -408,10 +451,30 @@ class H3Connection:
 
     def on_server_event(self, ev):
         if isinstance(ev, HeadersReceived):
+            # RFC 9220 / RFC 8441: an extended CONNECT request (":protocol" =
+            # "websocket") bootstraps a WebSocket on this stream rather than a
+            # normal request; the stream stays open for bidirectional data.
+            if ev.stream_id not in self.websocket_streams and self._is_websocket_connect(ev.headers):
+                request = self._build_websocket_request(ev.stream_id, ev.headers)
+                if request is None:
+                    self.send_headers(ev.stream_id, [(b":status", b"400")], end_stream=True)
+                    self.flush()
+                    return
+                self.websocket_streams[ev.stream_id] = asyncio.Queue()
+                self.handler.create_task(self.websocket_respond(ev.stream_id, request))
+                return
+
             asm = self.assemblers.setdefault(ev.stream_id, RequestAssembler())
             asm.headers = ev.headers
 
         elif isinstance(ev, DataReceived):
+            if ev.stream_id in self.websocket_streams:
+                if ev.data:
+                    self.websocket_streams[ev.stream_id].put_nowait(ev.data)
+                if ev.stream_ended:
+                    self.websocket_streams[ev.stream_id].put_nowait(None)
+                return
+
             asm = self.assemblers.get(ev.stream_id)
 
             if asm is None:
@@ -515,6 +578,111 @@ class H3Connection:
 
         return Request(client=self.client, scheme=scheme, secure=True, protocol="HTTP/3.0", method=method, target=target or "/", headers=headers, body=body, h2=None, h3=H3Info(connection_id=self.quic.local_cid, stream_id=stream_id), tls=self.tls)
 
+    def _is_websocket_connect(self, raw_headers) -> bool:
+        method = protocol = None
+        for nameb, valueb in raw_headers:
+            name = nameb.decode("ascii", "replace") if isinstance(nameb, (bytes, bytearray)) else nameb
+            value = valueb.decode("ascii", "replace") if isinstance(valueb, (bytes, bytearray)) else valueb
+            if name == ":method":
+                method = value
+            elif name == ":protocol":
+                protocol = value
+        return method == "CONNECT" and protocol == "websocket"
+
+    def _build_websocket_request(self, stream_id: int, raw_headers) -> Request | None:
+        authority = ""
+        scheme: str | None = None
+        target: str | None = None
+        has_scheme = has_path = False
+        headers = Headers({})
+
+        for nameb, valueb in raw_headers:
+            name = nameb.decode("ascii", "replace") if isinstance(nameb, (bytes, bytearray)) else nameb
+            value = valueb.decode("utf-8", "replace") if isinstance(valueb, (bytes, bytearray)) else valueb
+
+            if name == ":scheme":
+                scheme = value if value in ("http", "https") else "https"
+                has_scheme = True
+            elif name == ":path":
+                target = value
+                has_path = True
+            elif name == ":authority":
+                authority = value
+                headers.append("host", value)
+            elif name in (":method", ":protocol"):
+                continue
+            elif not name.startswith(":"):
+                headers.append(name, value)
+
+        # RFC 8441 §4: an extended CONNECT must carry :scheme and :path.
+        if not authority or not has_scheme or not has_path or scheme not in ("http", "https"):
+            return None
+
+        return Request(client=self.client, scheme=scheme, secure=True, protocol="HTTP/3.0", method="GET", target=target or "/", headers=headers, body=None, h2=None, h3=H3Info(connection_id=self.quic.local_cid, stream_id=stream_id), tls=self.tls)
+
+    async def websocket_respond(self, stream_id: int, request: Request):
+        subprotocol, deflate = negotiate_websocket(request, self.handler.callback.websocket_subprotocols)
+
+        headers: list[tuple[bytes, bytes]] = [(b":status", b"200")]
+        if subprotocol:
+            headers.append((b"sec-websocket-protocol", subprotocol.encode("latin-1")))
+        if deflate is not None:
+            headers.append((b"sec-websocket-extensions", deflate.response_header().encode("latin-1")))
+
+        self.send_headers(stream_id, headers, end_stream=False)
+        self.flush()
+
+        transport = H3WebSocketTransport(self, stream_id)
+        ws = WebSocket(transport, require_masking=False, subprotocol=subprotocol, deflate=deflate, max_message_size=self.config.max_websocket_message_size if self.handler else None)
+
+        self.handler.create_task(self.websocket_read(stream_id, ws))
+        await self.run_websocket(request, ws)
+
+    async def websocket_read(self, stream_id: int, ws: WebSocket):
+        queue = self.websocket_streams.get(stream_id)
+        if queue is None:
+            return
+
+        buf = bytearray()
+        max_size = self.config.max_websocket_message_size if self.handler else None
+
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                ws.end_queue()
+                break
+
+            buf.extend(chunk)
+            try:
+                frames = parse_frames(buf, max_size)
+            except WebSocketProtocolError:
+                ws.close_transport(1002)
+                break
+            except ValueError:
+                ws.close_transport(1009)
+                break
+
+            for frame in frames:
+                ws.feed_frame(frame)
+
+        self.websocket_streams.pop(stream_id, None)
+
+    async def run_websocket(self, request: Request, ws: WebSocket):
+        import traceback
+
+        active = getattr(self.handler, "active_websockets", None)
+        if active is not None:
+            active.add(ws)
+        try:
+            await self.handler.callback.on_websocket(request, ws)
+        except Exception:
+            traceback.print_exc()
+        finally:
+            if active is not None:
+                active.discard(ws)
+            if not ws.closed:
+                await ws.close(1011)
+
     async def respond(self, request: Request):
         if request.h3 is None:
             return
@@ -594,6 +762,31 @@ class H3Connection:
             await loop.run_in_executor(None, fp.close)
 
     def on_client_event(self, ev):
+        if ev.stream_id in self.websocket_streams:
+            if isinstance(ev, HeadersReceived):
+                status = 0
+                subprotocol = None
+                for nameb, valueb in ev.headers:
+                    name = nameb.decode("ascii", "replace") if isinstance(nameb, (bytes, bytearray)) else nameb
+                    value = valueb.decode("utf-8", "replace") if isinstance(valueb, (bytes, bytearray)) else valueb
+                    if name == ":status":
+                        try:
+                            status = int(value)
+                        except ValueError:
+                            status = 0
+                    elif name == "sec-websocket-protocol":
+                        subprotocol = value
+                fut = self.websocket_pending.pop(ev.stream_id, None)
+                if fut is not None and not fut.done():
+                    fut.set_result((status, subprotocol))
+
+            elif isinstance(ev, DataReceived):
+                if ev.data:
+                    self.websocket_streams[ev.stream_id].put_nowait(ev.data)
+                if ev.stream_ended:
+                    self.websocket_streams[ev.stream_id].put_nowait(None)
+            return
+
         state = self.streams.get(ev.stream_id)
 
         if state is None:
@@ -658,6 +851,30 @@ class H3Connection:
         except BaseException:
             self.streams.pop(stream_id, None)
             raise
+
+    async def open_websocket(self, request: Request, *, subprotocols: list[str] | None = None) -> WebSocket:
+        # Client-side WebSocket over HTTP/3 via extended CONNECT (RFC 9220).
+        stream_id = self.open_request_stream()
+        headers = H3.build_websocket_connect_headers(request, self.authority, subprotocols)
+
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self.websocket_pending[stream_id] = future
+        self.websocket_streams[stream_id] = asyncio.Queue()
+
+        self.send_headers(stream_id, headers, end_stream=False)
+        self.flush()
+
+        status, subprotocol = await future
+        if status != 200:
+            self.websocket_streams.pop(stream_id, None)
+            raise ConnectionError(f"WebSocket upgrade over HTTP/3 failed: status {status}")
+
+        transport = H3WebSocketTransport(self, stream_id)
+        max_size = self.config.max_websocket_message_size if self.handler else None
+        ws = WebSocket(transport, require_masking=False, mask_frames=True, subprotocol=subprotocol, deflate=None, max_message_size=max_size)
+
+        asyncio.ensure_future(self.websocket_read(stream_id, ws))
+        return ws
 
     def lost(self, exc: BaseException | None):
         self.fail_all(exc or ConnectionError("connection lost"))
