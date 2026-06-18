@@ -28,6 +28,9 @@ TP_ACK_DELAY_EXPONENT = 0x0A
 TP_MAX_ACK_DELAY = 0x0B
 TP_ACTIVE_CONNECTION_ID_LIMIT = 0x0E
 TP_INITIAL_SCID = 0x0F
+TP_MAX_DATAGRAM_FRAME_SIZE = 0x20  # RFC 9221
+
+DEFAULT_MAX_DATAGRAM_FRAME_SIZE = 65535
 
 DEFAULT_MAX_DATA = 1 << 24
 DEFAULT_MAX_STREAM_DATA = 1 << 20
@@ -57,6 +60,10 @@ class StopSendingReceived:
 class ConnectionTerminated:
     error_code: int
     reason: str
+
+@dataclass
+class DatagramReceived:
+    data: bytes
 
 def encode_transport_parameters(params: dict[int, int | bytes]) -> bytes:
     buf = bytearray()
@@ -165,6 +172,12 @@ class QUICConnection:
         self.max_data_local = DEFAULT_MAX_DATA
         self.data_received = 0
         self.max_data_pending = False
+
+        # Unreliable datagrams (RFC 9221). We advertise our receive limit; the
+        # peer's limit (0 = unsupported) gates what we may send.
+        self.local_max_datagram_frame_size = DEFAULT_MAX_DATAGRAM_FRAME_SIZE
+        self.peer_max_datagram_frame_size = 0
+        self.datagrams_pending: list[bytes] = []
         self.suite = suite_for(INITIAL_CIPHER)
 
         self.remote_cid_set = not is_client
@@ -193,7 +206,8 @@ class QUICConnection:
             TP_ACTIVE_CONNECTION_ID_LIMIT: 2,
             TP_INITIAL_SCID: local_cid,
             TP_MAX_IDLE_TIMEOUT: 30000,
-            TP_MAX_UDP_PAYLOAD: MAX_DATAGRAM_SIZE
+            TP_MAX_UDP_PAYLOAD: MAX_DATAGRAM_SIZE,
+            TP_MAX_DATAGRAM_FRAME_SIZE: DEFAULT_MAX_DATAGRAM_FRAME_SIZE
         }
 
         if local_tp_extra:
@@ -227,7 +241,8 @@ class QUICConnection:
             TP_INITIAL_MAX_STREAMS_UNI: DEFAULT_MAX_STREAMS,
             TP_ACTIVE_CONNECTION_ID_LIMIT: 2,
             TP_MAX_IDLE_TIMEOUT: 30000,
-            TP_MAX_UDP_PAYLOAD: MAX_DATAGRAM_SIZE
+            TP_MAX_UDP_PAYLOAD: MAX_DATAGRAM_SIZE,
+            TP_MAX_DATAGRAM_FRAME_SIZE: DEFAULT_MAX_DATAGRAM_FRAME_SIZE
         }
 
         if local_tp_extra:
@@ -279,6 +294,19 @@ class QUICConnection:
         stream = self.ensure_stream(stream_id)
         stream.sender.write(data, end_stream)
 
+    def send_datagram(self, data: bytes):
+        # RFC 9221: only after the peer advertised a non-zero limit, and never
+        # larger than that limit (frame type + length + payload). DATAGRAM
+        # frames cannot be fragmented, so the frame must also fit in one packet.
+        if self.peer_max_datagram_frame_size <= 0:
+            raise ValueError("peer does not support QUIC DATAGRAM frames")
+        frame_size = len(frames.Datagram(data).encode())
+        if frame_size > self.peer_max_datagram_frame_size:
+            raise ValueError("DATAGRAM frame exceeds peer's max_datagram_frame_size")
+        if frame_size > MAX_DATAGRAM_SIZE - 64:
+            raise ValueError("DATAGRAM frame too large to fit a single packet")
+        self.datagrams_pending.append(data)
+
     def reset_stream(self, stream_id: int, error_code: int):
         stream = self.ensure_stream(stream_id)
         stream.reset_pending = (error_code, stream.sender.written)
@@ -329,6 +357,7 @@ class QUICConnection:
 
             self.peer_max_data = int(self.peer_transport_params.get(TP_INITIAL_MAX_DATA, DEFAULT_MAX_DATA) or 0)
             self.peer_max_idle = int(self.peer_transport_params.get(TP_MAX_IDLE_TIMEOUT, 0) or 0)
+            self.peer_max_datagram_frame_size = int(self.peer_transport_params.get(TP_MAX_DATAGRAM_FRAME_SIZE, 0) or 0)
             self.max_bidi_streams = int(self.peer_transport_params.get(TP_INITIAL_MAX_STREAMS_BIDI, DEFAULT_MAX_STREAMS) or DEFAULT_MAX_STREAMS)
             self.max_uni_streams = int(self.peer_transport_params.get(TP_INITIAL_MAX_STREAMS_UNI, DEFAULT_MAX_STREAMS) or DEFAULT_MAX_STREAMS)
             for stream in self.streams.values():
@@ -662,6 +691,15 @@ class QUICConnection:
                     self.close(0x0a, "RETIRE_CONNECTION_ID references unissued sequence number", application=False)
                     return
 
+            elif ftype is frames.Datagram:
+                if self.local_max_datagram_frame_size <= 0 or level != LEVEL_APPLICATION:
+                    self.close(0x0a, "PROTOCOL_VIOLATION: unexpected DATAGRAM frame", application=False)
+                    return
+                if len(f.encode()) > self.local_max_datagram_frame_size:
+                    self.close(0x0a, "PROTOCOL_VIOLATION: DATAGRAM exceeds advertised limit", application=False)
+                    return
+                self._events.append(DatagramReceived(f.data))
+
             elif ftype is frames.HandshakeDone:
                 if level != LEVEL_APPLICATION:
                     self.close(0x0a, "HANDSHAKE_DONE received at wrong encryption level", application=False)
@@ -938,6 +976,19 @@ class QUICConnection:
                 self.max_data_pending = False
                 sent_frames.append(("max_data",))
                 ack_eliciting = True
+
+            # Unreliable DATAGRAM frames (RFC 9221): sent best-effort, never
+            # retransmitted on loss, so they are not added to sent_frames.
+            sent_count = 0
+            for data in self.datagrams_pending:
+                encoded = frames.Datagram(data).encode()
+                if len(encoded) > max_len - len(payload) - 16:
+                    break
+                payload += encoded
+                ack_eliciting = True
+                sent_count += 1
+            if sent_count:
+                del self.datagrams_pending[:sent_count]
 
             for stream in self.streams.values():
                 if stream.max_stream_data_pending and max_len - len(payload) > 24:

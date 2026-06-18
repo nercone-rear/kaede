@@ -27,6 +27,8 @@ FRAME_PATH_RESPONSE = 0x1B
 FRAME_CONNECTION_CLOSE = 0x1C
 FRAME_CONNECTION_CLOSE_APP = 0x1D
 FRAME_HANDSHAKE_DONE = 0x1E
+FRAME_DATAGRAM_NOLEN = 0x30
+FRAME_DATAGRAM_LEN = 0x31
 
 STREAM_FIN_BIT = 0x01
 STREAM_LEN_BIT = 0x02
@@ -246,6 +248,15 @@ class HandshakeDone:
     def encode(self) -> bytes:
         return bytes([FRAME_HANDSHAKE_DONE])
 
+@dataclass
+class Datagram:
+    data: bytes
+
+    def encode(self) -> bytes:
+        # Always use the length-prefixed form (0x31) so a DATAGRAM frame can be
+        # coalesced with other frames in a packet (RFC 9221 §4).
+        return bytes([FRAME_DATAGRAM_LEN]) + encode_uint_var(len(self.data)) + self.data
+
 def pull_frame(buf: Buffer):
     frame_type = buf.pull_uint_var()
 
@@ -355,6 +366,14 @@ def pull_frame(buf: Buffer):
 
     if frame_type == FRAME_HANDSHAKE_DONE:
         return HandshakeDone()
+
+    if frame_type in (FRAME_DATAGRAM_NOLEN, FRAME_DATAGRAM_LEN):
+        if frame_type & 0x01:  # LEN bit present
+            length = buf.pull_uint_var()
+            data = buf.pull_bytes(length)
+        else:
+            data = buf.pull_bytes(buf.remaining())
+        return Datagram(data)
 
     raise ValueError(f"unknown frame type 0x{frame_type:x}")
 
