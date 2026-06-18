@@ -144,13 +144,18 @@ class Server:
         self.config = config or Config()
 
     def bind_unix(self, path: os.PathLike) -> socket.socket:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
-
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.bind(os.fspath(path))
+
+        try:
+            sock.bind(os.fspath(path))
+        except OSError:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+            sock.bind(os.fspath(path))
+
         sock.listen(socket.SOMAXCONN)
         sock.setblocking(False)
         return sock

@@ -1,6 +1,6 @@
 import os
 import ipaddress
-from kaede.models import Headers, Request, Response, RequestStream, ResponseStream, Callback
+from kaede.models import Headers, Request, Response, RawRequest, RawResponse, Callback
 
 class TestHeaders:
     def test_case_insensitive_set_get(self):
@@ -346,9 +346,9 @@ class TestResponse:
         r = Response(body=b"data")
         assert r.is_streaming is False
 
-class TestRequestStream:
+class TestRawRequest:
     def test_defaults(self):
-        rs = RequestStream()
+        rs = RawRequest()
         assert rs.method == ""
         assert rs.target == ""
         assert rs.scheme == "https"
@@ -358,19 +358,19 @@ class TestRequestStream:
         assert len(rs.body) == 0
 
     def test_custom_fields(self):
-        rs = RequestStream(method="POST", target="/upload", authority="example.com")
+        rs = RawRequest(method="POST", target="/upload", authority="example.com")
         assert rs.method == "POST"
         assert rs.target == "/upload"
         assert rs.authority == "example.com"
 
-class TestResponseStream:
+class TestRawResponse:
     def test_defaults(self):
-        rs = ResponseStream()
+        rs = RawResponse()
         assert rs.status_code == 0
         assert isinstance(rs.headers, Headers)
         assert isinstance(rs.body, bytearray)
         assert len(rs.body) == 0
 
     def test_custom_fields(self):
-        rs = ResponseStream(status_code=200)
+        rs = RawResponse(status_code=200)
         assert rs.status_code == 200

@@ -63,12 +63,6 @@ def peername(addr) -> tuple:
         return (ipaddress.IPv4Address("0.0.0.0"), 0)
 
 class H3:
-    """Stateless HTTP/3 protocol helpers (framing, settings, headers).
-
-    Per-connection state (QUIC stream management, request/response assembly)
-    is owned by :class:`H3Connection`.
-    """
-
     @staticmethod
     def encode_frame(frame_type: int, payload: bytes) -> bytes:
         return encode_uint_var(frame_type) + encode_uint_var(len(payload)) + payload
@@ -119,14 +113,6 @@ class RequestAssembler:
         self.too_large = False
 
 class H3Connection:
-    """Manages a single HTTP/3 connection over QUIC (server or client side).
-
-    Wraps a :class:`~kaede.quic.QUICConnection`, manages the HTTP/3 control and
-    QPACK streams, assembles requests/responses and pumps QUIC datagrams to the
-    transport owned by an :class:`H3Protocol`. Stateless helpers live in
-    :class:`H3`.
-    """
-
     def __init__(self, quic: QUICConnection, protocol, is_client: bool = False, *, addr=None, authority: str = ""):
         self.quic = quic
         self.protocol = protocol
@@ -167,8 +153,6 @@ class H3Connection:
 
     def now(self) -> float:
         return asyncio.get_running_loop().time()
-
-    # --- H3 framing ---
 
     def setup(self):
         self.control_stream_id = self.quic.get_next_available_stream_id(is_bidi=False)
@@ -260,8 +244,6 @@ class H3Connection:
             self.finished.add(sid)
             out.append(DataReceived(sid, b"", stream_ended=True))
 
-    # --- datagram processing ---
-
     def receive_datagram(self, data: bytes) -> bool:
         self.quic.receive_datagram(data, self.now())
         events = self.quic.events()
@@ -312,8 +294,6 @@ class H3Connection:
         self.timer = None
         self.quic.handle_timer(self.now())
         self.flush()
-
-    # --- server: request assembly + response ---
 
     def on_server_event(self, ev):
         if isinstance(ev, HeadersReceived):
@@ -431,8 +411,10 @@ class H3Connection:
                 remaining = end - start + 1
 
             pending = await loop.run_in_executor(None, fp.read, 65536 if remaining is None else min(65536, remaining))
+            sent_any = False
 
             while pending:
+                sent_any = True
                 if remaining is not None:
                     remaining -= len(pending)
 
@@ -442,10 +424,12 @@ class H3Connection:
                 self.flush()
                 pending = nxt
 
+            if not sent_any:
+                self.send_data(stream_id, b"", end_stream=True)
+                self.flush()
+
         finally:
             await loop.run_in_executor(None, fp.close)
-
-    # --- client: response assembly + request ---
 
     def on_client_event(self, ev):
         state = self.streams.get(ev.stream_id)
@@ -530,18 +514,13 @@ class H3Connection:
         self.close()
 
 class H3Protocol(asyncio.DatagramProtocol):
-    """asyncio datagram protocol for HTTP/3 over QUIC.
-
-    On the server a single instance multiplexes many :class:`H3Connection`
-    objects keyed by peer address; on the client it drives a single connection.
-    """
-
-    def __init__(self, handler=None, *, is_client: bool = False, connection: H3Connection | None = None):
+    def __init__(self, handler=None, *, is_client: bool = False, connection: H3Connection | None = None, max_connections: int = 4096):
         self.handler = handler
         self.is_client = is_client
         self.transport: asyncio.DatagramTransport | None = None
         self.connection = connection
         self.connections: dict[tuple, H3Connection] = {}
+        self.max_connections = max_connections
 
     def connection_made(self, transport):
         self.transport = transport
@@ -557,7 +536,9 @@ class H3Protocol(asyncio.DatagramProtocol):
 
         conn = self.connections.get(addr)
         if conn is None:
-            if not data or not (data[0] & 0x80):
+            if (len(data) < 1200 or (data[0] & 0xF0) != 0xC0 or data[1:5] != b"\x00\x00\x00\x01"):
+                return
+            if len(self.connections) >= self.max_connections:
                 return
             try:
                 quic = QUICConnection.create_server(data, lambda tp: QuicTLS.for_server(self.handler.config.tls, transport_params=tp))

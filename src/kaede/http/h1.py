@@ -241,13 +241,6 @@ class H1:
             i += size + 2
 
 class H1Connection:
-    """Manages a single HTTP/1.1 connection (server or client side).
-
-    Holds the per-connection state machine and drives requests/responses over
-    the transport owned by an :class:`H1Protocol`. Stateless protocol logic is
-    delegated to :class:`H1`.
-    """
-
     def __init__(self, protocol, is_client: bool = False, *, key: tuple | None = None, authority: str | None = None):
         self.protocol = protocol
         self.handler = protocol.handler
@@ -315,8 +308,6 @@ class H1Connection:
         else:
             self.server_lost(exc)
 
-    # --- server: keepalive ---
-
     def reset_keepalive(self):
         if self.keep_alive_handle is not None:
             self.keep_alive_handle.cancel()
@@ -334,8 +325,6 @@ class H1Connection:
         self.keep_alive_handle = None
         if self.transport is not None and not self.transport.is_closing():
             self.transport.close()
-
-    # --- server: receive ---
 
     def feed_server(self, data: bytes):
         if self.transport is None:
@@ -483,7 +472,8 @@ class H1Connection:
             del self.buffer[:consumed]
             self.continue_sent = False
 
-            keep_alive = not "close" in (request.headers.get("Connection") or "").lower()
+            connection_tokens = [t.strip() for t in (request.headers.get("Connection") or "").lower().split(",")]
+            keep_alive = "close" not in connection_tokens
 
             if self.request_consumer is None:
                 self.request_consumer = self.handler.create_task(self.consume_requests())
@@ -510,8 +500,6 @@ class H1Connection:
     def send_error(self, status: int, phrase: str):
         if self.transport is not None and not self.transport.is_closing():
             self.transport.write(f"HTTP/1.1 {status} {phrase}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".encode("latin-1"))
-
-    # --- server: response ---
 
     async def run_websocket(self, request: Request, ws: WebSocket):
         self.handler.active_websockets.add(ws)
@@ -694,8 +682,6 @@ class H1Connection:
 
         self.request_queue.put_nowait(None)
         self.buffer.clear()
-
-    # --- client: receive ---
 
     def feed_client(self, data: bytes):
         self.buffer.extend(data)
@@ -926,17 +912,10 @@ class H1Connection:
             self.current = None
 
 class H1Protocol(TCPProtocol):
-    """asyncio protocol for plaintext HTTP/1.1 connections (server or client).
-
-    TLS-terminated connections, where ALPN may select HTTP/2, are handled by
-    :class:`~kaede.handler.tcp.TCPProtocol` with a factory that chooses between
-    :class:`H1Connection` and an HTTP/2 connection.
-    """
-
     def __init__(self, handler, *, is_client: bool = False, tls_context=None, server_name: str | None = None, key: tuple | None = None, authority: str | None = None):
         self._key = key
         self._authority = authority
-        super().__init__(is_client=is_client, factory=self._build, tls_context=tls_context, server_name=server_name, handler=handler)
+        super().__init__(is_client=is_client, factory=self.build, tls_context=tls_context, server_name=server_name, handler=handler)
 
-    def _build(self, protocol, alpn):
+    def build(self, protocol, alpn):
         return H1Connection(protocol, is_client=self.is_client, key=self._key, authority=self._authority)

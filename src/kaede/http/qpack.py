@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..huffman import huffman_decode
+
 STATIC_TABLE: list[tuple[bytes, bytes]] = [
     (b":authority", b""),
     (b":path", b"/"),
@@ -217,6 +219,8 @@ def decode_headers(data: bytes) -> list[tuple[bytes, bytes]]:
             if not is_static:
                 raise QpackError("dynamic table reference not supported")
 
+            if index >= len(STATIC_TABLE):
+                raise QpackError(f"static table index out of range: {index}")
             headers.append(STATIC_TABLE[index])
 
         elif first & 0x40:
@@ -226,6 +230,8 @@ def decode_headers(data: bytes) -> list[tuple[bytes, bytes]]:
             if not is_static:
                 raise QpackError("dynamic table reference not supported")
 
+            if index >= len(STATIC_TABLE):
+                raise QpackError(f"static table index out of range: {index}")
             name = STATIC_TABLE[index][0]
             value, offset = decode_string(data, offset, 7)
             headers.append((name, value))
@@ -239,6 +245,3 @@ def decode_headers(data: bytes) -> list[tuple[bytes, bytes]]:
             raise QpackError(f"unsupported QPACK representation 0x{first:02x}")
 
     return headers
-
-def huffman_decode(data: bytes) -> bytes:
-    raise QpackError("Huffman-encoded QPACK literals are not yet supported")

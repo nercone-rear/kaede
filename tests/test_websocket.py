@@ -248,9 +248,9 @@ class TestPerMessageDeflate:
         pmd = PerMessageDeflate(server_no_context_takeover=False)
         data = b"repeated repeated repeated" * 50
         c1 = pmd.compress(data)
-        assert pmd.compress_ctx is not None
+        assert pmd.compress_context is not None
         c2 = pmd.compress(data)
-        assert pmd.compress_ctx is not None
+        assert pmd.compress_context is not None
         assert pmd.decompress(c1) == data
         assert pmd.decompress(c2) == data
 
@@ -259,7 +259,7 @@ class TestPerMessageDeflate:
         data = b"hello" * 100
         c1 = pmd.compress(data)
         c2 = pmd.compress(data)
-        assert pmd.compress_ctx is None
+        assert pmd.compress_context is None
 
     def test_decompress_context_reuse(self):
         pmd = PerMessageDeflate(client_no_context_takeover=False)

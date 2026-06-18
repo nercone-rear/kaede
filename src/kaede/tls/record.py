@@ -26,7 +26,7 @@ class TLSContext:
     def for_client(cls, config: TLSClientConfig, *, alpn: tuple[str, ...]) -> "TLSContext":
         lib = OpenSSL.get()
         ctx, keepalive = lib.new_context(is_client=True, alpn=alpn, groups=config.groups, ciphers=config.ciphers, min_version=int(config.minimum_version), max_version=TLS1_3_VERSION)
-        verify_hostname = lib.apply_client_config(lib, ctx, config)
+        verify_hostname = lib.apply_client_config(ctx, config)
         return cls(lib, ctx, keepalive, is_client=True, verify_hostname=verify_hostname)
 
     def connection(self, server_name: str | None = None) -> "TLS":
@@ -119,12 +119,19 @@ class TLS:
         offset = 0
         while offset < len(data):
             ret = ssl.SSL_write(self.SSL, ctypes.cast(ctypes.byref(buf, offset), VOID_P), len(data) - offset)
+
             if ret > 0:
                 offset += ret
                 continue
+
             err = ssl.SSL_get_error(self.SSL, ret)
-            if err in (SSL_ERROR_WANT_READ, SSL_ERROR_WANT_WRITE):
-                continue
+
+            if err == SSL_ERROR_WANT_READ:
+                raise TLSError(f"SSL_write needs read-side data (renegotiation not supported)")
+
+            if err == SSL_ERROR_WANT_WRITE:
+                return
+
             raise TLSError(f"SSL_write failed (SSL_get_error={err}): {self.lib.errors()}")
 
     def drain(self) -> bytes:

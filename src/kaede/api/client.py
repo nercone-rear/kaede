@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from importlib.metadata import version
 
-from ..http import H1
 from ..tls import TLSContext, TLSClientConfig
+from ..http import H1
 from ..models import Request, Response, Headers
-from ..process import process_response, wrap_streaming_response
+from ..process import process_response
 from ..websocket import WebSocket, generate_key, check_accept
 from ..handler.tcp import TCPProtocol, WSClientProtocol
 from ..http.h1 import H1Connection, H1Protocol
@@ -114,6 +114,9 @@ class Handler:
         kinds.sort(key=lambda item: item[1])
         return [kind for kind, _ in kinds]
 
+    def connection_count(self, key: tuple) -> int:
+        return sum(1 for c in self.connections if getattr(c, "key", None) == key)
+
     async def get_connection(self, scheme: str, host: str, port: int, authority: str):
         key = (scheme, host, port)
 
@@ -132,6 +135,9 @@ class Handler:
                 conn = idle.pop()
                 if conn.is_open():
                     return conn
+
+            if self.connection_count(key) >= self.config.max_connections_per_host:
+                raise ConnectionError(f"connection limit reached for {scheme}://{key[1]}:{key[2]}")
 
             conn = await self.establish(scheme, host, port, authority)
             self.connections.add(conn)
@@ -210,14 +216,17 @@ class Handler:
 
     async def request(self, method: str, url: str, headers: dict[str, str] | None, body: bytes | None, streaming: bool) -> Response:
         request, host, port, authority = build_request(method, url, self.config, headers, body)
+
+        await request.compress()
+
+        if request.body is not None and "Content-Encoding" in request.headers:
+            request.headers.set("Content-Length", str(len(request.body)))
+
         conn = await self.get_connection(request.scheme, host, port, authority)
 
         response = await conn.request(request, streaming)
 
-        if streaming:
-            response = wrap_streaming_response(response, self.config)
-        else:
-            response = await process_response(response, request, self.config)
+        response = await process_response(response, self.config)
 
         return response
 

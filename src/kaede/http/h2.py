@@ -12,7 +12,7 @@ import h2.errors
 import h2.events
 from h2.settings import SettingCodes
 
-from ..models import Request, Response, Headers, RequestStream, ResponseStream
+from ..models import Request, Response, Headers, RawRequest, RawResponse
 from ..tls import TLSInfo
 from ..process import process_request
 from ..websocket import WebSocket, WebSocketProtocolError, parse_frames
@@ -32,11 +32,6 @@ class H2WSUpgrade:
     request: Request
 
 class H2:
-    """Stateless HTTP/2 protocol helpers (header (de)composition).
-
-    Per-connection state is owned by :class:`H2Connection`.
-    """
-
     FORBIDDEN_HEADERS = H2_FORBIDDEN_HEADERS
 
     @staticmethod
@@ -101,13 +96,6 @@ class H2:
         return headers
 
 class H2Connection:
-    """Manages a single HTTP/2 connection (server or client side).
-
-    Wraps the ``h2`` state machine, drives stream send/receive flow control and
-    bridges requests/responses (and CONNECT-based WebSockets) to the transport
-    owned by an :class:`H2Protocol`. Stateless helpers live in :class:`H2`.
-    """
-
     def __init__(self, protocol, is_client: bool = False, *, key: tuple | None = None, authority: str | None = None):
         self.protocol = protocol
         self.handler = protocol.handler
@@ -124,11 +112,12 @@ class H2Connection:
         self.client_side = is_client
         self.connection = h2.connection.H2Connection(config=h2.config.H2Configuration(client_side=is_client, header_encoding="utf-8"))
 
-        self.request_streams: dict[int, RequestStream] = {}
-        self.response_streams: dict[int, ResponseStream] = {}
+        self.request_streams: dict[int, RawRequest] = {}
+        self.response_streams: dict[int, RawResponse] = {}
         self.websocket_streams: dict[int, asyncio.Queue[bytes | None]] = {}
 
         self.reset_count = 0
+        self.reset_window_start: float = 0.0
 
         self.max_body_size = config.max_body_size
         self.max_stream_resets = getattr(config, "max_stream_resets", 1000)
@@ -168,8 +157,6 @@ class H2Connection:
     def tls(self) -> TLSInfo | None:
         return self.protocol.tls
 
-    # --- lifecycle ---
-
     def start(self):
         if self.transport is not None:
             self.transport.write(self.initiate())
@@ -194,8 +181,6 @@ class H2Connection:
     def close(self):
         self.protocol.close()
 
-    # --- server keepalive ---
-
     def reset_keepalive(self):
         if self.keep_alive_handle is not None:
             self.keep_alive_handle.cancel()
@@ -214,8 +199,6 @@ class H2Connection:
         if self.transport is not None and not self.transport.is_closing():
             self.transport.close()
 
-    # --- h2 state machine ---
-
     def initiate(self) -> bytes:
         self.connection.initiate_connection()
         if self.client_side:
@@ -232,7 +215,7 @@ class H2Connection:
 
         for event in events:
             if isinstance(event, h2.events.RequestReceived):
-                stream = RequestStream(scheme=scheme)
+                stream = RawRequest(scheme=scheme)
                 websocket_protocol: str | None = None
 
                 for name, value in event.headers:
@@ -299,6 +282,10 @@ class H2Connection:
                     completed.append(self.finalize_request(event.stream_id, client, secure, tls))
 
             elif isinstance(event, h2.events.StreamReset):
+                now = asyncio.get_event_loop().time()
+                if now - self.reset_window_start > 30.0:
+                    self.reset_count = 0
+                    self.reset_window_start = now
                 self.reset_count += 1
 
                 if self.reset_count > self.max_stream_resets:
@@ -570,8 +557,6 @@ class H2Connection:
 
         return self.connection.data_to_send(), out_events, closed
 
-    # --- server: receive + response ---
-
     def feed_server(self, data: bytes):
         if self.transport is None:
             return
@@ -711,7 +696,10 @@ class H2Connection:
             if self.stream_buffered(stream_id) <= self.config.max_stream_buffer_size:
                 return
 
-            await self.flow_control_event.wait()
+            try:
+                await asyncio.wait_for(self.flow_control_event.wait(), timeout=30.0)
+            except asyncio.TimeoutError:
+                return
 
     async def websocket_read(self, stream_id: int, ws: WebSocket):
         queue = self.websocket_streams.get(stream_id)
@@ -769,8 +757,6 @@ class H2Connection:
         for queue in self.websocket_streams.values():
             queue.put_nowait(None)
         self.flow_control_event.set()
-
-    # --- client: receive + request ---
 
     def feed_client(self, data: bytes):
         if self.transport is None:
@@ -881,16 +867,10 @@ class H2ClientWSTransport:
             self.connection.transport.write(out)
 
 class H2Protocol(TCPProtocol):
-    """asyncio protocol for HTTP/2 connections with prior knowledge (h2c).
-
-    TLS-terminated HTTP/2 is established through
-    :class:`~kaede.handler.tcp.TCPProtocol` after ALPN selects ``h2``.
-    """
-
     def __init__(self, handler, *, is_client: bool = False, tls_context=None, server_name: str | None = None, key: tuple | None = None, authority: str | None = None):
         self._key = key
         self._authority = authority
-        super().__init__(is_client=is_client, factory=self._build, tls_context=tls_context, server_name=server_name, handler=handler)
+        super().__init__(is_client=is_client, factory=self.build, tls_context=tls_context, server_name=server_name, handler=handler)
 
-    def _build(self, protocol, alpn):
+    def build(self, protocol, alpn):
         return H2Connection(protocol, is_client=self.is_client, key=self._key, authority=self._authority)

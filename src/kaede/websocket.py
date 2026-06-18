@@ -121,35 +121,48 @@ class PerMessageDeflate:
         self.client_no_context_takeover = client_no_context_takeover
         self.server_max_window_bits = server_max_window_bits
         self.client_max_window_bits = client_max_window_bits
-        self.compress_ctx: Any | None = None
-        self.decompress_ctx: Any | None = None
+        self.compress_context: Any | None = None
+        self.decompress_context: Any | None = None
 
     def compress(self, data: bytes) -> bytes:
         if self.server_no_context_takeover:
-            ctx = zlib.compressobj(wbits=-self.server_max_window_bits)
+            context = zlib.compressobj(wbits=-self.server_max_window_bits)
         else:
-            if self.compress_ctx is None:
-                self.compress_ctx = zlib.compressobj(wbits=-self.server_max_window_bits)
-            ctx = self.compress_ctx
-        compressed = ctx.compress(data) + ctx.flush(zlib.Z_SYNC_FLUSH)
+            if self.compress_context is None:
+                self.compress_context = zlib.compressobj(wbits=-self.server_max_window_bits)
+            context = self.compress_context
+
+        compressed = context.compress(data) + context.flush(zlib.Z_SYNC_FLUSH)
+
         if compressed.endswith(b"\x00\x00\xff\xff"):
             compressed = compressed[:-4]
+
         return compressed
 
     def decompress(self, data: bytes, max_size: int | None = None) -> bytes:
         data = data + b"\x00\x00\xff\xff"
+
         if self.client_no_context_takeover:
-            ctx = zlib.decompressobj(wbits=-self.client_max_window_bits)
+            context = zlib.decompressobj(wbits=-self.client_max_window_bits)
         else:
-            if self.decompress_ctx is None:
-                self.decompress_ctx = zlib.decompressobj(wbits=-self.client_max_window_bits)
-            ctx = self.decompress_ctx
-        if max_size is None:
-            return ctx.decompress(data)
-        result = ctx.decompress(data, max_size)
-        if ctx.unconsumed_tail:
-            raise ValueError("decompressed websocket message exceeds max message size")
-        return result
+            if self.decompress_context is None:
+                self.decompress_context = zlib.decompressobj(wbits=-self.client_max_window_bits)
+            context = self.decompress_context
+
+        try:
+            if max_size is None:
+                return context.decompress(data)
+
+            result = context.decompress(data, max_size)
+
+            if context.unconsumed_tail:
+                raise ValueError("decompressed websocket message exceeds max message size")
+
+            return result
+
+        except Exception:
+            self.decompress_context = None
+            raise
 
     def response_header(self) -> str:
         parts = ["permessage-deflate"]
@@ -178,8 +191,6 @@ class PerMessageDeflate:
                 else:
                     params[part.strip().lower()] = True
 
-            client_no_ctx = "client_no_context_takeover" in params
-
             server_max = 15
             v = params.get("server_max_window_bits")
             if v is not None and v is not True:
@@ -196,7 +207,7 @@ class PerMessageDeflate:
                 except (ValueError, TypeError):
                     pass
 
-            return PerMessageDeflate(server_no_context_takeover=True, client_no_context_takeover=client_no_ctx, server_max_window_bits=server_max, client_max_window_bits=client_max)
+            return PerMessageDeflate(server_no_context_takeover=True, client_no_context_takeover="client_no_context_takeover" in params, server_max_window_bits=server_max, client_max_window_bits=client_max)
         return None
 
 class WebSocket:
@@ -274,6 +285,9 @@ class WebSocket:
                     self.close_transport(1009)
 
             else:
+                if self.max_message_size is not None and len(frame.payload) > self.max_message_size:
+                    self.close_transport(1009)
+                    return
                 self.fragments = bytearray(frame.payload)
                 self.fragment_opcode = frame.opcode
                 self.fragment_rsv1 = frame.rsv1
@@ -309,7 +323,7 @@ class WebSocket:
             except Exception:
                 pass
 
-        self.queue.put_nowait(None)
+            self.queue.put_nowait(None)
 
     async def ping(self, payload: bytes = b""):
         if self.closed:

@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import os
+import gzip
+import zlib
 import socket
+import asyncio
+import rjsmin
+import rcssmin
 import ipaddress
+import zstandard
+import brotlicffi
+import minify_html
+from scour import scour
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Literal, Awaitable
 from dataclasses import dataclass, field
@@ -18,14 +27,21 @@ if TYPE_CHECKING:
 class Request:
     method: Literal["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
     target: str
+    headers: Headers = field(default_factory=lambda: Headers({}))
+    body: bytes | None = None
+    content_type: str | None = None
 
     client: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
     scheme: Literal["http", "https"] = "http"
     secure: bool = False
 
+    compression: bool = True
+    minification: bool = False
+
+    compressed: bytes | AsyncIterator[bytes] | None = None
+    minified: bytes | AsyncIterator[bytes] | None = None
+
     protocol: Literal["HTTP/1.1", "HTTP/2.0", "HTTP/3.0"] = "HTTP/1.1"
-    headers: Headers = field(default_factory=lambda: Headers({}))
-    body: bytes | None = None
 
     h2: H2Info | None = None
     h3: H3Info | None = None
@@ -40,6 +56,50 @@ class Request:
 
         return upgrade == "websocket" and "upgrade" in connection and bool(websocket_key) and websocket_version == "13"
 
+    async def compress(self, encoding: str = "zstd", max_compressible_file_size: int = 16 * 1024 * 1024):
+        if not (self.body is not None and self.compression):
+            return
+
+        if "Content-Encoding" in self.headers:
+            return
+
+        content_type = (self.content_type or self.headers.get("Content-Type")).split(";", 1)[0].strip().lower() if "Content-Type" in self.headers else ""
+
+        if content_type.startswith(("image/", "video/", "audio/")) and content_type != "image/svg+xml":
+            return
+
+        if content_type in ("application/zip", "application/gzip", "application/x-gzip", "application/zstd", "application/x-zstd", "application/x-bzip2", "application/x-xz", "application/x-7z-compressed", "application/x-rar-compressed", "application/pdf", "application/ogg", "font/woff", "font/woff2"):
+            return
+
+        if encoding == "zstd":
+            self.body = zstandard.ZstdCompressor(level=3).compress(self.body)
+        elif encoding == "br":
+            self.body = brotlicffi.compress(self.body, quality=4)
+        elif encoding == "gzip":
+            self.body = gzip.compress(self.body, compresslevel=6)
+        elif encoding == "deflate":
+            self.body = zlib.compress(self.body, level=6)
+
+        self.headers.set("Content-Encoding", encoding)
+
+    def decompress(self, encoding: str | None = None):
+        if not self.compression or self.body is not None:
+            return
+
+        encoding = encoding.strip().lower() if encoding is not None else self.headers.get("Content-Encoding", "").strip().lower()
+
+        if encoding == "zstd":
+            self.body = zstandard.ZstdDecompressor().decompress(self.compressed)
+        elif encoding == "br":
+            self.body = brotlicffi.decompress(self.compressed)
+        elif encoding in ("gzip", "x-gzip"):
+            self.body = gzip.decompress(self.compressed)
+        elif encoding == "deflate":
+            try:
+                self.body = zlib.decompress(self.compressed)
+            except zlib.error:
+                self.body = zlib.decompress(self.compressed, -zlib.MAX_WBITS)
+
 @dataclass
 class Response:
     body: bytes | AsyncIterator[bytes] | os.PathLike | None = None
@@ -49,6 +109,9 @@ class Response:
 
     compression: bool = True
     minification: bool = False
+
+    compressed: bytes | AsyncIterator[bytes] | None = None
+    minified: bytes | AsyncIterator[bytes] | None = None
 
     protocol: Literal["HTTP/1.1", "HTTP/2.0", "HTTP/3.0"] = "HTTP/1.1"
 
@@ -62,8 +125,256 @@ class Response:
     def is_streaming(self) -> bool:
         return hasattr(self.body, "__aiter__")
 
+    async def compress(self, accepted_encodings: dict[str, float], max_compressible_file_size: int = 16 * 1024 * 1024):
+        if not (self.body is not None and self.compression and accepted_encodings):
+            return
+
+        if "Content-Encoding" in self.headers:
+            return
+
+        content_type = (self.content_type or self.headers.get("Content-Type")).split(";", 1)[0].strip().lower() if "Content-Type" in self.headers else ""
+
+        if content_type.startswith(("image/", "video/", "audio/")) and content_type != "image/svg+xml":
+            return
+
+        if content_type in ("application/zip", "application/gzip", "application/x-gzip", "application/zstd", "application/x-zstd", "application/x-bzip2", "application/x-xz", "application/x-7z-compressed", "application/x-rar-compressed", "application/pdf", "application/ogg", "font/woff", "font/woff2"):
+            return
+
+        star_q = accepted_encodings.get("*")
+        scored: list[tuple[float, int, str]] = []
+
+        for encoding, priority in (("zstd", 0), ("br", 1), ("gzip", 2), ("deflate", 3)):
+            q = accepted_encodings.get(encoding) or star_q
+
+            if q is None or q <= 0:
+                continue
+
+            scored.append((-q, priority, encoding))
+
+        scored.sort()
+
+        for _, _, encoding in scored:
+            if self.is_streaming:
+                body = self.body
+
+                if encoding == "zstd":
+                    async def compress_stream_zstd(src=body):
+                        compressor = zstandard.ZstdCompressor(level=3).compressobj()
+
+                        async for chunk in src:
+                            out = compressor.compress(chunk)
+                            if out:
+                                yield out
+
+                        out = compressor.flush(zstandard.COMPRESSOBJ_FLUSH_FINISH)
+                        if out:
+                            yield out
+
+                    self.body = compress_stream_zstd()
+
+                elif encoding == "br":
+                    async def compress_stream_brotli(src=body):
+                        compressor = brotlicffi.Compressor(quality=4)
+
+                        async for chunk in src:
+                            out = compressor.process(chunk)
+
+                            if out:
+                                yield out
+
+                        out = compressor.finish()
+                        if out:
+                            yield out
+
+                    self.body = compress_stream_brotli()
+
+                elif encoding == "gzip":
+                    async def compress_stream_gzip(src=body):
+                        compressor = zlib.compressobj(level=6, wbits=31)
+
+                        async for chunk in src:
+                            out = compressor.compress(chunk)
+
+                            if out:
+                                yield out
+
+                        out = compressor.flush(zlib.Z_FINISH)
+                        if out:
+                            yield out
+
+                    self.body = compress_stream_gzip()
+
+                elif encoding == "deflate":
+                    async def compress_stream_deflate(src=body):
+                        compressor = zlib.compressobj(level=6)
+
+                        async for chunk in src:
+                            out = compressor.compress(chunk)
+                            if out:
+                                yield out
+
+                        out = compressor.flush(zlib.Z_FINISH)
+                        if out:
+                            yield out
+
+                    self.body = compress_stream_deflate()
+
+                else:
+                    continue
+
+                self.headers.set("Content-Encoding", encoding)
+                self.headers.append_vary("Accept-Encoding")
+
+                return
+
+            if self.has_real_body:
+                try:
+                    if encoding == "zstd":
+                        self.body = zstandard.ZstdCompressor(level=3).compress(self.body)
+                    elif encoding == "br":
+                        self.body = brotlicffi.compress(self.body, quality=4)
+                    elif encoding == "gzip":
+                        self.body = gzip.compress(self.body, compresslevel=6)
+                    elif encoding == "deflate":
+                        self.body = zlib.compress(self.body, level=6)
+                    else:
+                        continue
+                except Exception:
+                    continue
+
+                self.headers.set("Content-Encoding", encoding)
+                self.headers.append_vary("Accept-Encoding")
+
+                return
+
+            loop = asyncio.get_running_loop()
+
+            try:
+                path_str = os.fspath(self.body)
+
+                if await loop.run_in_executor(None, os.path.getsize, path_str) > max_compressible_file_size:
+                    return
+
+                def read_file():
+                    with open(path_str, "rb") as f:
+                        return f.read()
+
+                data = await loop.run_in_executor(None, read_file)
+
+                if encoding == "zstd":
+                    compressed = zstandard.ZstdCompressor(level=3).compress(data)
+                elif encoding == "br":
+                    compressed = brotlicffi.compress(data, quality=4)
+                elif encoding == "gzip":
+                    compressed = gzip.compress(data, compresslevel=6)
+                elif encoding == "deflate":
+                    compressed = zlib.compress(data, level=6)
+                else:
+                    continue
+
+            except Exception:
+                continue
+
+            self.body = compressed
+            self.headers.set("Content-Encoding", encoding)
+            self.headers.append_vary("Accept-Encoding")
+
+            return
+
+    def decompress(self, encoding: str | None = None):
+        if not self.compression or self.body is not None:
+            return
+
+        encoding = encoding.strip().lower() if encoding is not None else self.headers.get("Content-Encoding", "").strip().lower()
+
+        if hasattr(self.compressed, "__aiter__"):
+            compressed = self.compressed
+
+            if encoding == "zstd":
+                async def decompress_stream_zstd(src=compressed):
+                    decompressor = zstandard.ZstdDecompressor().decompressobj()
+                    async for chunk in src:
+                        out = decompressor.decompress(chunk)
+                        if out:
+                            yield out
+
+                self.body = decompress_stream_zstd()
+
+            elif encoding == "br":
+                async def decompress_stream_brotli(src=compressed):
+                    decompressor = brotlicffi.Decompressor()
+                    async for chunk in src:
+                        out = decompressor.process(chunk)
+                        if out:
+                            yield out
+
+                self.body = decompress_stream_brotli()
+
+            elif encoding in ("gzip", "x-gzip"):
+                async def decompress_stream_gzip(src=compressed):
+                    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                    async for chunk in src:
+                        out = decompressor.decompress(chunk)
+                        if out:
+                            yield out
+
+                    out = decompressor.flush()
+                    if out:
+                        yield out
+
+                self.body = decompress_stream_gzip()
+
+            elif encoding == "deflate":
+                async def decompress_stream_deflate(src=compressed):
+                    decompressor = zlib.decompressobj(zlib.MAX_WBITS)
+                    async for chunk in src:
+                        out = decompressor.decompress(chunk)
+                        if out:
+                            yield out
+
+                    out = decompressor.flush()
+                    if out:
+                        yield out
+
+                self.body = decompress_stream_deflate()
+
+        else:
+            if encoding == "zstd":
+                self.body = zstandard.ZstdDecompressor().decompress(self.compressed)
+            elif encoding == "br":
+                self.body = brotlicffi.decompress(self.compressed)
+            elif encoding in ("gzip", "x-gzip"):
+                self.body = gzip.decompress(self.compressed)
+            elif encoding == "deflate":
+                try:
+                    self.body = zlib.decompress(self.compressed)
+                except zlib.error:
+                    self.body = zlib.decompress(self.compressed, -zlib.MAX_WBITS)
+
+    async def minify(self):
+        if not (self.minification and self.has_real_body):
+            return
+
+        content_type = (self.content_type or self.headers.get("Content-Type") or "").strip().lower()
+
+        try:
+            if content_type.startswith("text/html"):
+                self.body = minify_html.minify(self.body.decode("utf-8", errors="replace"), minify_js=True, minify_css=True, keep_comments=True, keep_html_and_head_opening_tags=True).encode("utf-8")
+            elif content_type.startswith("text/css"):
+                self.body = rcssmin.cssmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
+            elif content_type.startswith(("text/javascript", "application/javascript")):
+                self.body = rjsmin.jsmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
+            elif content_type.startswith("image/svg"):
+                options = scour.generateDefaultOptions()
+                options.newlines = False
+                options.shorten_ids = True
+                options.strip_comments = True
+                self.body = scour.scourString(self.body.decode("utf-8", errors="replace"), options).encode("utf-8")
+        except Exception:
+            pass
+
 @dataclass
-class RequestStream:
+class RawRequest:
     method: str = ""
     target: str = ""
     scheme: str = "https"
@@ -72,7 +383,7 @@ class RequestStream:
     body: bytearray = field(default_factory=bytearray)
 
 @dataclass
-class ResponseStream:
+class RawResponse:
     status_code: int = 0
     headers: Headers = field(default_factory=lambda: Headers({}))
     body: bytearray = field(default_factory=bytearray)
