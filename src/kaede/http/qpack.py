@@ -244,4 +244,4 @@ def decode_headers(data: bytes) -> list[tuple[bytes, bytes]]:
         else:
             raise QpackError(f"unsupported QPACK representation 0x{first:02x}")
 
-    return headers
+    return [(n, v) for n, v in headers if b"\r" not in n and b"\n" not in n and b"\x00" not in n and b"\r" not in v and b"\n" not in v and b"\x00" not in v]

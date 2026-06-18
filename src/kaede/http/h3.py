@@ -330,6 +330,7 @@ class H3Connection:
         method = "GET"
         target = "/"
         authority = ""
+        scheme = "https"
         headers = Headers({})
 
         for nameb, valueb in asm.headers:
@@ -338,6 +339,9 @@ class H3Connection:
 
             if name == ":method":
                 method = value
+
+            elif name == ":scheme":
+                scheme = value if value in ("http", "https") else "https"
 
             elif name == ":path":
                 target = value
@@ -351,7 +355,7 @@ class H3Connection:
 
         body = bytes(asm.body) if asm.body else None
 
-        return Request(client=self.client, scheme="https", secure=True, protocol="HTTP/3.0", method=method, target=target, headers=headers, body=body, h2=None, h3=H3Info(connection_id=self.quic.local_cid, stream_id=stream_id), tls=self.tls)
+        return Request(client=self.client, scheme=scheme, secure=True, protocol="HTTP/3.0", method=method, target=target, headers=headers, body=body, h2=None, h3=H3Info(connection_id=self.quic.local_cid, stream_id=stream_id), tls=self.tls)
 
     async def respond(self, request: Request):
         if request.h3 is None:

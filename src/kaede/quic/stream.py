@@ -162,6 +162,8 @@ class StreamSender:
         if fin:
             self.fin_pending = True
 
+MAX_STREAM_RECEIVE_BUFFER = 8 * 1024 * 1024
+
 class StreamReceiver:
     def __init__(self):
         self.buffer = bytearray()
@@ -184,6 +186,9 @@ class StreamReceiver:
 
         index = offset - self.consumed
         need = index + len(data)
+
+        if need > MAX_STREAM_RECEIVE_BUFFER:
+            raise ValueError(f"stream receive buffer would exceed limit ({need} > {MAX_STREAM_RECEIVE_BUFFER})")
 
         if need > len(self.buffer):
             self.buffer.extend(b"\x00" * (need - len(self.buffer)))

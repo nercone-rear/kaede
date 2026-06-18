@@ -266,10 +266,12 @@ class WebSocket:
                 self.closed = True
                 echo = frame.payload[:2] if len(frame.payload) >= 2 else b""
                 self.write(build_frame(Opcode.CLOSE, echo, mask=self.mask_frames))
-                try:
-                    self.transport.close()
-                except Exception:
-                    pass
+
+            try:
+                self.transport.close()
+            except Exception:
+                pass
+
             self.queue.put_nowait(None)
             return
 
@@ -356,10 +358,4 @@ class WebSocket:
         self.closed = True
         payload = struct.pack(">H", code) + reason.encode("utf-8")
         self.write(build_frame(Opcode.CLOSE, payload, mask=self.mask_frames))
-
-        try:
-            self.transport.close()
-        except Exception:
-            pass
-
         self.queue.put_nowait(None)

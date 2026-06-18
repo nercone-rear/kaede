@@ -53,6 +53,12 @@ class TLS:
         self.rbio = crypto.BIO_new(method)
         self.wbio = crypto.BIO_new(method)
         if not self.rbio or not self.wbio:
+            if self.rbio:
+                crypto.BIO_free(self.rbio)
+                self.rbio = None
+            if self.wbio:
+                crypto.BIO_free(self.wbio)
+                self.wbio = None
             ssl.SSL_free(self.SSL)
             self.SSL = None
             raise TLSError("BIO_new(BIO_s_mem()) failed")
@@ -66,7 +72,10 @@ class TLS:
         if context.is_client:
             ssl.SSL_set_connect_state(self.SSL)
             if server_name:
-                self.sni = server_name.encode("idna")
+                try:
+                    self.sni = server_name.encode("idna")
+                except (UnicodeError, UnicodeDecodeError):
+                    self.sni = server_name.encode("ascii")
                 ssl.SSL_ctrl(self.SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, ctypes.cast(ctypes.c_char_p(self.sni), VOID_P))
                 if context.verify_hostname:
                     ssl.SSL_set1_host(self.SSL, self.sni)
@@ -130,7 +139,7 @@ class TLS:
                 raise TLSError(f"SSL_write needs read-side data (renegotiation not supported)")
 
             if err == SSL_ERROR_WANT_WRITE:
-                return
+                raise TLSError("SSL_write returned WANT_WRITE unexpectedly; write BIO is blocked")
 
             raise TLSError(f"SSL_write failed (SSL_get_error={err}): {self.lib.errors()}")
 

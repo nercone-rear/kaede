@@ -83,7 +83,7 @@ class Request:
         self.headers.set("Content-Encoding", encoding)
 
     def decompress(self, encoding: str | None = None):
-        if not self.compression or self.body is not None:
+        if not self.compression or self.body is not None or self.compressed is None:
             return
 
         encoding = encoding.strip().lower() if encoding is not None else self.headers.get("Content-Encoding", "").strip().lower()
@@ -282,7 +282,7 @@ class Response:
             return
 
     def decompress(self, encoding: str | None = None):
-        if not self.compression or self.body is not None:
+        if not self.compression or self.body is not None or self.compressed is None:
             return
 
         encoding = encoding.strip().lower() if encoding is not None else self.headers.get("Content-Encoding", "").strip().lower()
@@ -351,20 +351,20 @@ class Response:
                 except zlib.error:
                     self.body = zlib.decompress(self.compressed, -zlib.MAX_WBITS)
 
-    async def minify(self):
+    async def minify(self, *, html: bool = False, css: bool = False, js: bool = False, svg: bool = False, keep_html_comments: bool = False):
         if not (self.minification and self.has_real_body):
             return
 
         content_type = (self.content_type or self.headers.get("Content-Type") or "").strip().lower()
 
         try:
-            if content_type.startswith("text/html"):
-                self.body = minify_html.minify(self.body.decode("utf-8", errors="replace"), minify_js=True, minify_css=True, keep_comments=True, keep_html_and_head_opening_tags=True).encode("utf-8")
-            elif content_type.startswith("text/css"):
+            if html and content_type.startswith("text/html"):
+                self.body = minify_html.minify(self.body.decode("utf-8", errors="replace"), minify_js=True, minify_css=True, keep_comments=keep_html_comments, keep_html_and_head_opening_tags=True).encode("utf-8")
+            elif css and content_type.startswith("text/css"):
                 self.body = rcssmin.cssmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
-            elif content_type.startswith(("text/javascript", "application/javascript")):
+            elif js and content_type.startswith(("text/javascript", "application/javascript")):
                 self.body = rjsmin.jsmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
-            elif content_type.startswith("image/svg"):
+            elif svg and content_type.startswith("image/svg"):
                 options = scour.generateDefaultOptions()
                 options.newlines = False
                 options.shorten_ids = True

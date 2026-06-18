@@ -21,11 +21,13 @@ def parse_peername(transport: asyncio.BaseTransport) -> tuple[ipaddress.IPv4Addr
 
 def negotiate_websocket(request: Request, subprotocols: list[str]) -> tuple[str | None, PerMessageDeflate | None]:
     offered_raw = request.headers.get("Sec-WebSocket-Protocol") or ""
-    offered = [p.strip() for p in offered_raw.split(",") if p.strip()] if offered_raw else [] # type: ignore
+    offered_str = offered_raw if isinstance(offered_raw, str) else (offered_raw[0] if offered_raw else "")
+    offered = [p.strip() for p in offered_str.split(",") if p.strip()] if offered_str else []
     subprotocol: str | None = next((subprotocol for subprotocol in offered if subprotocol in subprotocols), None)
 
     ext_raw = request.headers.get("Sec-WebSocket-Extensions") or ""
-    deflate = PerMessageDeflate.from_client_offer(ext_raw) if ext_raw else None # type: ignore
+    ext_str = ext_raw if isinstance(ext_raw, str) else (ext_raw[0] if ext_raw else "")
+    deflate = PerMessageDeflate.from_client_offer(ext_str) if ext_str else None
 
     return subprotocol, deflate
 

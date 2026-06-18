@@ -48,6 +48,8 @@ class QuicTLS:
         ssl = self.lib.ssl
         self.SSL = ssl.SSL_new(ctx_ptr)
         if not self.SSL:
+            ssl.SSL_CTX_free(ctx_ptr)
+            self.ctx = None
             raise TLSError(f"SSL_new failed: {self.lib.errors()}")
 
         self.install_callbacks()
@@ -60,7 +62,10 @@ class QuicTLS:
         if is_client:
             ssl.SSL_set_connect_state(self.SSL)
             if server_name:
-                self.sni = server_name.encode("idna")
+                try:
+                    self.sni = server_name.encode("idna")
+                except (UnicodeError, UnicodeDecodeError):
+                    self.sni = server_name.encode("ascii")
                 ssl.SSL_ctrl(self.SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, ctypes.cast(ctypes.c_char_p(self.sni), VOID_P))
                 if verify_hostname:
                     ssl.SSL_set1_host(self.SSL, self.sni)
@@ -233,12 +238,12 @@ class QuicTLS:
     def for_server(cls, config: TLSServerConfig, *, alpn: tuple[str, ...] = ("h3",), transport_params: bytes = b"") -> "QuicTLS":
         lib = OpenSSL.get()
         ctx, keepalive = lib.new_context(is_client=False, alpn=alpn, groups=config.groups, ciphers=config.ciphers, min_version=TLS1_3_VERSION, max_version=TLS1_3_VERSION)
-        lib.apply_server_config(lib, ctx, config)
+        lib.apply_server_config(ctx, config)
         return cls(ctx, lib, is_client=False, transport_params=transport_params, keepalive=keepalive)
 
     @classmethod
     def for_client(cls, config: TLSClientConfig, server_name: str, *, alpn: tuple[str, ...] = ("h3",), transport_params: bytes = b"") -> "QuicTLS":
         lib = OpenSSL.get()
-        ctx, keepalive = lib.new_context(lib, is_client=True, alpn=alpn, groups=config.groups, ciphers=config.ciphers, min_version=TLS1_3_VERSION, max_version=TLS1_3_VERSION)
-        verify_hostname = lib.apply_client_config(lib, ctx, config)
+        ctx, keepalive = lib.new_context(is_client=True, alpn=alpn, groups=config.groups, ciphers=config.ciphers, min_version=TLS1_3_VERSION, max_version=TLS1_3_VERSION)
+        verify_hostname = lib.apply_client_config(ctx, config)
         return cls(ctx, lib, is_client=True, server_name=server_name, verify_hostname=verify_hostname, transport_params=transport_params, keepalive=keepalive)

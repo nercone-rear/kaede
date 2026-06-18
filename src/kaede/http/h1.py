@@ -83,7 +83,7 @@ class H1:
         except ValueError:
             phrase = ""
 
-        built = f"HTTP/1.1 {response.status_code}" + (f" {phrase}" if phrase else "") + "\r\n"
+        built = f"HTTP/1.1 {response.status_code} {phrase}\r\n"
 
         for key, value in response.headers.items():
             if any(c in key for c in "\r\n\x00") or any(c in value for c in "\r\n\x00"):
@@ -536,8 +536,11 @@ class H1Connection:
             self.keep_alive = False
 
         if "h3" in self.config.protocols and self.config.bind_quic:
-            _, _, h3_port = self.config.bind_quic[0].rpartition(':')
-            response.headers.set("Alt-Svc", f"h3=\":{int(h3_port)}\"", override=False)
+            try:
+                _, _, h3_port = self.config.bind_quic[0].rpartition(':')
+                response.headers.set("Alt-Svc", f"h3=\":{int(h3_port)}\"", override=False)
+            except (ValueError, IndexError):
+                pass
 
         if response.is_streaming:
             await self.stream(response)

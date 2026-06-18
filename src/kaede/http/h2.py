@@ -282,7 +282,7 @@ class H2Connection:
                     completed.append(self.finalize_request(event.stream_id, client, secure, tls))
 
             elif isinstance(event, h2.events.StreamReset):
-                now = asyncio.get_event_loop().time()
+                now = asyncio.get_running_loop().time()
                 if now - self.reset_window_start > 30.0:
                     self.reset_count = 0
                     self.reset_window_start = now
@@ -601,8 +601,11 @@ class H2Connection:
             response = await process_request(request, callback=self.handler.callback, config=self.config)
 
             if "h3" in self.config.protocols and self.config.bind_quic:
-                _, _, h3_port = self.config.bind_quic[0].rpartition(':')
-                response.headers.set("Alt-Svc", f"h3=\":{int(h3_port)}\"", override=False)
+                try:
+                    _, _, h3_port = self.config.bind_quic[0].rpartition(':')
+                    response.headers.set("Alt-Svc", f"h3=\":{int(h3_port)}\"", override=False)
+                except (ValueError, IndexError):
+                    pass
 
             if response.is_streaming:
                 await self.stream(request.h2.stream_id, response)
@@ -818,7 +821,7 @@ class H2Connection:
             raise ConnectionError(f"websocket upgrade rejected with status {status}")
 
         subprotocol = (headers.get("Sec-WebSocket-Protocol") or "").strip() or None
-        ws = WebSocket(H2ClientWSTransport(self, stream_id), require_masking=False, mask_frames=True, subprotocol=subprotocol, max_message_size=self.config.max_websocket_message_size)
+        ws = WebSocket(H2ClientWSTransport(self, stream_id), require_masking=False, mask_frames=False, subprotocol=subprotocol, max_message_size=self.config.max_websocket_message_size)
 
         self.handler.create_task(self.websocket_read(stream_id, ws))
         return ws

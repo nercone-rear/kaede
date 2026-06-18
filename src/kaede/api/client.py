@@ -243,12 +243,13 @@ class Handler:
         if scheme == "http":
             return await self.websocket_h1(host, port, authority, request, subprotocols, None)
 
-        last_error: BaseException | None = None
-        for kind in self.ordered_kinds():
-            try:
-                if kind == "h3":
-                    continue
+        non_h3_kinds = [k for k in self.ordered_kinds() if k != "h3"]
+        if not non_h3_kinds:
+            raise ConnectionError("WebSocket over HTTP/3 is not supported; configure http/1.1 or h2 in protocols")
 
+        last_error: BaseException | None = None
+        for kind in non_h3_kinds:
+            try:
                 conn = await self.connect_tcp(key, host, port, authority, self.tls_client_context())
                 self.connections.add(conn)
 

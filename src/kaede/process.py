@@ -30,7 +30,7 @@ def parse_accept_encoding(accept_encoding: str) -> dict[str, float]:
             param = param.strip()
             if param.startswith("q="):
                 try:
-                    q = float(param[2:])
+                    q = max(0.0, min(1.0, float(param[2:])))
                 except ValueError:
                     q = 0.0
                 break
@@ -121,7 +121,7 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
 
     try:
         if response.has_real_body:
-            await response.minify()
+            await response.minify(html=config.minify_html, css=config.minify_css, js=config.minify_js, svg=config.minify_svg, keep_html_comments=config.minify_keep_html_comments)
 
             range_header = request.headers.get("Range", "")
             if (range_header and request.method in ("GET", "HEAD") and response.status_code == 200):
@@ -196,7 +196,7 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
                 else:
                     response.headers.set("Content-Length", str(total))
 
-        if response.headers.get("Content-Type", "").startswith("text/") and "charset=" not in response.headers.get("Content-Type", ""):
+        if (response.has_real_body or response.is_streaming) and response.headers.get("Content-Type", "").startswith("text/") and "charset=" not in response.headers.get("Content-Type", ""):
             response.headers.set("Content-Type", response.headers.get("Content-Type", "") + "; charset=utf-8")
 
     except Exception:
@@ -205,6 +205,12 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
     if request.method == "HEAD":
         if response.is_streaming:
             response.headers.remove("Transfer-Encoding")
+            if hasattr(response.body, "aclose"):
+                try:
+                    await response.body.aclose()
+                except Exception:
+                    pass
+
         response.body = None
 
     return response

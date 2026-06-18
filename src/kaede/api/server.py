@@ -45,6 +45,12 @@ class Config:
     auto_restart: bool = True
     shutdown_timeout: float = 30
 
+    minify_html: bool = False
+    minify_css: bool = False
+    minify_js: bool = False
+    minify_svg: bool = False
+    minify_keep_html_comments: bool = False
+
 class Handler:
     def __init__(self, listener: Listener, callback: Callback, config: Config):
         self.listener = listener
@@ -144,17 +150,20 @@ class Server:
         self.config = config or Config()
 
     def bind_unix(self, path: os.PathLike) -> socket.socket:
+        import stat
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        path_str = os.fspath(path)
 
         try:
-            sock.bind(os.fspath(path))
+            sock.bind(path_str)
         except OSError:
             try:
-                os.unlink(path)
-            except FileNotFoundError:
+                if stat.S_ISSOCK(os.stat(path_str).st_mode):
+                    os.unlink(path_str)
+            except (FileNotFoundError, OSError):
                 pass
 
-            sock.bind(os.fspath(path))
+            sock.bind(path_str)
 
         sock.listen(socket.SOMAXCONN)
         sock.setblocking(False)
@@ -257,6 +266,8 @@ class Server:
                 except ProcessLookupError:
                     pass
 
+        original_sigint = signal.getsignal(signal.SIGINT)
+        original_sigterm = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGINT, forward_signal)
         signal.signal(signal.SIGTERM, forward_signal)
 
@@ -273,6 +284,9 @@ class Server:
                     break
 
         finally:
+            signal.signal(signal.SIGINT, original_sigint or signal.SIG_DFL)
+            signal.signal(signal.SIGTERM, original_sigterm or signal.SIG_DFL)
+
             for pid in alive:
                 try:
                     os.kill(pid, signal.SIGTERM)

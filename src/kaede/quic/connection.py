@@ -126,6 +126,8 @@ class QUICConnection:
         self.next_bidi = 0 if is_client else 1
         self.peer_transport_params: dict[int, int | bytes] = {}
         self.peer_max_data = DEFAULT_MAX_DATA
+        self.max_bidi_streams: int | None = None
+        self.max_uni_streams: int | None = None
         self.data_sent = 0
         self.suite = suite_for(INITIAL_CIPHER)
 
@@ -186,9 +188,14 @@ class QUICConnection:
 
     def get_next_available_stream_id(self, is_bidi: bool = True) -> int:
         if is_bidi:
+            if self.max_bidi_streams is not None and self.next_bidi // 4 >= self.max_bidi_streams:
+                raise ConnectionError("peer bidirectional stream limit reached")
             sid = self.next_bidi
             self.next_bidi += 4
         else:
+            base = 2 if self.is_client else 3
+            if self.max_uni_streams is not None and (self.next_uni - base) // 4 >= self.max_uni_streams:
+                raise ConnectionError("peer unidirectional stream limit reached")
             sid = self.next_uni
             self.next_uni += 4
 
@@ -255,6 +262,8 @@ class QUICConnection:
         if self.tls.peer_transport_params and not self.peer_transport_params:
             self.peer_transport_params = decode_transport_parameters(self.tls.peer_transport_params)
             self.peer_max_data = int(self.peer_transport_params.get(TP_INITIAL_MAX_DATA, DEFAULT_MAX_DATA) or 0)
+            self.max_bidi_streams = int(self.peer_transport_params.get(TP_INITIAL_MAX_STREAMS_BIDI, DEFAULT_MAX_STREAMS) or DEFAULT_MAX_STREAMS)
+            self.max_uni_streams = int(self.peer_transport_params.get(TP_INITIAL_MAX_STREAMS_UNI, DEFAULT_MAX_STREAMS) or DEFAULT_MAX_STREAMS)
             for stream in self.streams.values():
                 if stream.max_stream_data_remote == 0:
                     stream.max_stream_data_remote = self.peer_initial_stream_limit(stream.stream_id)
@@ -386,6 +395,9 @@ class QUICConnection:
         largest = self.largest_recv.get(space, -1)
         pn = packet.decode_packet_number(truncated, pn_len, largest if largest >= 0 else 0)
 
+        if pn in self.recv_pns[space]:
+            return None, 0
+
         header = bytes(buf[:rel_pn + pn_len])
         ciphertext = bytes(buf[rel_pn + pn_len:])
         try:
@@ -444,6 +456,12 @@ class QUICConnection:
             elif ftype is frames.ConnectionClose:
                 self.terminated = True
                 self._events.append(ConnectionTerminated(f.error_code, f.reason.decode("utf-8", "replace")))
+
+            elif ftype is frames.MaxStreams:
+                if f.bidi:
+                    self.max_bidi_streams = max(self.max_bidi_streams or 0, f.maximum)
+                else:
+                    self.max_uni_streams = max(self.max_uni_streams or 0, f.maximum)
 
             elif ftype is frames.HandshakeDone:
                 self.handshake_confirmed = True
