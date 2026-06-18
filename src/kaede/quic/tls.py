@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import ipaddress
 
 from ..tls.models import TLSServerConfig, TLSClientConfig, TLSInfo
 from ..tls.openssl import OpenSSL, TLSError, VOID_P, LEVEL_INITIAL, LEVEL_EARLY, LEVEL_HANDSHAKE, LEVEL_APPLICATION, DIRECTION_READ, DIRECTION_WRITE, TLS1_3_VERSION, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, SSL_ERROR_WANT_READ, SSL_ERROR_WANT_WRITE
@@ -99,12 +100,19 @@ class QuicTLS:
             ssl.SSL_set_connect_state(self.SSL)
             if server_name:
                 try:
-                    self.sni = server_name.encode("idna")
-                except (UnicodeError, UnicodeDecodeError):
-                    self.sni = server_name.encode("ascii")
-                ssl.SSL_ctrl(self.SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, ctypes.cast(ctypes.c_char_p(self.sni), VOID_P))
-                if verify_hostname:
-                    ssl.SSL_set1_host(self.SSL, self.sni)
+                    ipaddress.ip_address(server_name)
+                    is_ip = True
+                except ValueError:
+                    is_ip = False
+
+                if not is_ip:
+                    try:
+                        self.sni = server_name.encode("idna")
+                    except (UnicodeError, UnicodeDecodeError):
+                        self.sni = server_name.encode("ascii")
+                    ssl.SSL_ctrl(self.SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, ctypes.cast(ctypes.c_char_p(self.sni), VOID_P))
+                    if verify_hostname:
+                        ssl.SSL_set1_host(self.SSL, self.sni)
         else:
             ssl.SSL_set_accept_state(self.SSL)
 

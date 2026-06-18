@@ -124,6 +124,9 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
         if response.has_real_body:
             await response.minify(html=config.minify_html, css=config.minify_css, js=config.minify_js, svg=config.minify_svg, keep_html_comments=config.minify_keep_html_comments)
 
+            if response.status_code == 200 and request.method in ("GET", "HEAD"):
+                response.headers.set("Accept-Ranges", "bytes", override=False)
+
             range_header = request.headers.get("Range", "")
             range_is_multi = range_header.startswith("bytes=") and "," in range_header[6:]
 

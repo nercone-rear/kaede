@@ -276,12 +276,12 @@ class TestPseudoHeaderOrdering:
 # RFC 9113 §8.1: Content-Length semantics in HTTP/2
 
 class TestH2ContentLength:
-    def test_content_length_with_empty_body_not_added(self):
-        """body=b'' is falsy; no content-length should be added"""
+    def test_content_length_zero_added_for_empty_body(self):
+        """RFC 9110 §8.6: body=b'' is an explicit empty body; content-length: 0 MUST be present"""
         req = Request(method="POST", target="/", headers=Headers({}))
         built = H2.build_request_headers(req, "example.com", body=b"")
-        names = [n for n, v in built]
-        assert "content-length" not in names
+        cl_values = [v for n, v in built if n == "content-length"]
+        assert cl_values == ["0"]
 
     def test_content_length_value_correct(self):
         """content-length must equal the actual body byte count"""

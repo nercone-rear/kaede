@@ -376,6 +376,10 @@ class WebSocket:
     async def ping(self, payload: bytes = b""):
         if self.closed:
             return
+
+        if len(payload) > 125:
+            raise ValueError(f"PING payload must be ≤ 125 bytes (RFC 6455 §5.5), got {len(payload)}")
+
         self.write(build_frame(Opcode.PING, payload, mask=self.mask_frames))
 
     async def receive(self) -> bytes | None:
@@ -402,7 +406,14 @@ class WebSocket:
         if self.closed:
             return
         self.closed = True
-        payload = struct.pack(">H", code) + reason.encode("utf-8")
+
+        reason_bytes = reason.encode("utf-8")
+        if len(reason_bytes) > 123:
+            reason_bytes = reason_bytes[:123].decode("utf-8", "ignore").encode("utf-8")
+            if len(reason_bytes) > 123:
+                reason_bytes = b""
+        payload = struct.pack(">H", code) + reason_bytes
+
         self.write(build_frame(Opcode.CLOSE, payload, mask=self.mask_frames))
 
         def force_close():

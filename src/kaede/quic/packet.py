@@ -187,7 +187,11 @@ def parse_long_header(datagram: bytes, offset: int = 0) -> LongHeader:
         token = buf.pull_bytes(token_len)
 
     if packet_type == PACKET_TYPE_RETRY:
-        length = buf.remaining()
+        remaining = buf.remaining()
+        if remaining < 16:
+            raise BufferError("Retry packet too short for integrity tag")
+        token = buf.pull_bytes(remaining - 16)
+        length = 16
         pn_offset = buf.tell()
     else:
         length = buf.pull_uint_var()

@@ -282,6 +282,9 @@ class H3Connection:
             elif ident == SETTINGS_ENABLE_CONNECT_PROTOCOL:
                 self.peer_enable_connect = (value == 1)
 
+        if self.is_client and self.control_stream_id is not None:
+            self.quic.send_stream_data(self.control_stream_id, H3.encode_frame(FRAME_MAX_PUSH_ID, encode_uint_var(0)), end_stream=False)
+
     def feed_request_stream(self, sid: int, data: bytes, end_stream: bool, out: list):
         buf = self.request_buffers.setdefault(sid, bytearray())
 
@@ -398,6 +401,8 @@ class H3Connection:
             asm = self.assemblers.get(ev.stream_id)
 
             if asm is None:
+                if ev.data:
+                    self.quic.close(0x0105, "H3_FRAME_UNEXPECTED: DATA before HEADERS")
                 return
 
             if ev.data and not asm.too_large:
@@ -486,7 +491,13 @@ class H3Connection:
             if not method or not target or not has_scheme or scheme not in ("http", "https"):
                 return None
 
-        body = bytes(asm.body) if asm.body else None
+        content_length_hdr = headers.get("content-length")
+        if asm.body:
+            body: bytes | None = bytes(asm.body)
+        elif content_length_hdr is not None:
+            body = b""
+        else:
+            body = None
 
         return Request(client=self.client, scheme=scheme, secure=True, protocol="HTTP/3.0", method=method, target=target or "/", headers=headers, body=body, h2=None, h3=H3Info(connection_id=self.quic.local_cid, stream_id=stream_id), tls=self.tls)
 
@@ -614,7 +625,7 @@ class H3Connection:
         read_timeout = self.config.read_timeout if self.handler else 60
         stream_id = self.open_request_stream()
         headers = H3.build_request_headers(request, self.authority)
-        has_body = bool(request.body)
+        has_body = request.body is not None
         self.send_headers(stream_id, headers, end_stream=not has_body)
 
         if has_body:

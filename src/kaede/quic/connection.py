@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from . import frame as frames
 from . import packet
 from .packet import Buffer, encode_uint_var
-from .crypto import LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION,PacketKeys, suite_for, initial_keys, INITIAL_CIPHER
+from .crypto import PacketKeys, suite_for, initial_keys, verify_retry_integrity_tag, LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION, INITIAL_CIPHER
 from .stream import Stream, StreamSender, StreamReceiver, stream_is_bidirectional, stream_is_client_initiated
 from .recovery import Recovery, SentPacket, Space, level_to_space, SPACE_INITIAL, SPACE_HANDSHAKE, SPACE_APPLICATION
 from .tls import QuicTLS
@@ -181,6 +181,9 @@ class QUICConnection:
         hdr = packet.parse_long_header(first_datagram, 0)
 
         original_dcid = hdr.destination_cid
+        if len(original_dcid) < 8:
+            raise ValueError(f"Initial packet DCID too short: {len(original_dcid)} bytes (minimum 8)")
+
         remote_cid = hdr.source_cid
         local_cid = os.urandom(8)
 
@@ -363,7 +366,7 @@ class QUICConnection:
 
         if hdr.packet_type == packet.PACKET_TYPE_RETRY:
             if self.is_client and not self.handshake_complete and self._tls_factory is not None:
-                self.handle_retry(hdr)
+                self.handle_retry(hdr, data, offset)
             return len(data) - offset
 
         level = packet.level_for_long_type(hdr.packet_type)
@@ -540,6 +543,10 @@ class QUICConnection:
                     self.max_uni_streams = max(self.max_uni_streams or 0, f.maximum)
 
             elif ftype is frames.NewConnectionId:
+                if f.retire_prior_to > f.sequence_number:
+                    self.close(0x07, "NEW_CONNECTION_ID: retire_prior_to exceeds sequence_number", application=False)
+                    return
+
                 if f.retire_prior_to > 0:
                     self.remote_cid = f.connection_id
                     self.remote_cid_set = True
@@ -552,6 +559,10 @@ class QUICConnection:
             elif ftype is frames.HandshakeDone:
                 if level != LEVEL_APPLICATION:
                     self.close(0x0a, "HANDSHAKE_DONE received at wrong encryption level", application=False)
+                    return
+
+                if not self.is_client:
+                    self.close(0x0a, "HANDSHAKE_DONE must not be sent by client", application=False)
                     return
 
                 self.handshake_confirmed = True
@@ -599,7 +610,17 @@ class QUICConnection:
                     if st is not None:
                         st.sender.on_loss(off, length, fin)
 
-    def handle_retry(self, hdr) -> None:
+    def handle_retry(self, hdr, data: bytes, offset: int) -> None:
+        pn_offset = hdr.pn_offset
+        if pn_offset + 16 > len(data):
+            return
+
+        retry_without_tag = data[offset:pn_offset]
+        integrity_tag = data[pn_offset:pn_offset + 16]
+        pseudo_packet = bytes([len(self.original_dcid)]) + self.original_dcid + retry_without_tag
+        if not verify_retry_integrity_tag(pseudo_packet, integrity_tag):
+            return
+
         self.retry_token = hdr.token
 
         if not hdr.source_cid:

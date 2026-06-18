@@ -18,6 +18,8 @@ INITIAL_CIPHER = "TLS_AES_128_GCM_SHA256"
 
 AEAD_TAG_SIZE = 16
 
+RETRY_INTEGRITY_SECRET = bytes.fromhex("d9c9943e6101fd200021506bcc02814c73030f25c79d71ce876eca876d9fb057")
+
 @dataclass
 class Suite:
     name: str
@@ -89,3 +91,10 @@ def initial_keys(destination_connection_id: bytes) -> tuple[PacketKeys, PacketKe
     server_secret = hkdf_expand_label(secret, b"server in", suite.algorithm.digest_size, suite.algorithm)
 
     return PacketKeys(client_secret, suite), PacketKeys(server_secret, suite)
+
+def verify_retry_integrity_tag(pseudo_packet: bytes, tag: bytes) -> bool:
+    algo = hashes.SHA256()
+    key = hkdf_expand_label(RETRY_INTEGRITY_SECRET, b"quic retry integrity", 16, algo)
+    nonce = hkdf_expand_label(RETRY_INTEGRITY_SECRET, b"quic retry integrity nonce", 12, algo)
+    expected = AESGCM(key).encrypt(nonce, b"", pseudo_packet)
+    return expected == tag

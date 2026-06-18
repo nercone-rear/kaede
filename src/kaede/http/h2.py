@@ -71,7 +71,7 @@ class H2:
                 continue
             headers.append((lname, value))
 
-        if body:
+        if body is not None:
             headers.append(("content-length", str(len(body))))
 
         return headers
@@ -225,24 +225,30 @@ class H2Connection:
                 stream = RawRequest(scheme=scheme)
                 websocket_protocol: str | None = None
                 forbidden_header = False
+                seen_regular_header = False
                 has_scheme = False
                 has_path = False
 
                 for name, value in event.headers:
-                    if name == ":method":
-                        stream.method = value
-                    elif name == ":path":
-                        stream.target = value
-                        has_path = True
-                    elif name == ":scheme":
-                        stream.scheme = value
-                        has_scheme = True
-                    elif name == ":authority":
-                        stream.authority = value
-                        stream.headers.append("host", value)
-                    elif name == ":protocol":
-                        websocket_protocol = value
-                    elif not name.startswith(":"):
+                    if name.startswith(":"):
+                        if seen_regular_header:
+                            forbidden_header = True
+                            break
+                        if name == ":method":
+                            stream.method = value
+                        elif name == ":path":
+                            stream.target = value
+                            has_path = True
+                        elif name == ":scheme":
+                            stream.scheme = value
+                            has_scheme = True
+                        elif name == ":authority":
+                            stream.authority = value
+                            stream.headers.append("host", value)
+                        elif name == ":protocol":
+                            websocket_protocol = value
+                    else:
+                        seen_regular_header = True
                         lname = name.lower()
                         if lname in H2_FORBIDDEN_HEADERS or (lname == "te" and value.strip().lower() != "trailers"):
                             forbidden_header = True
@@ -445,12 +451,18 @@ class H2Connection:
 
     def finalize_request(self, stream_id: int, client: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int], secure: bool, tls: TLSInfo | None) -> Request | None:
         stream = self.request_streams.pop(stream_id)
-        body = bytes(stream.body) if stream.body else None
-
         content_length_hdr = stream.headers.get("content-length")
+
+        if stream.body:
+            body: bytes | None = bytes(stream.body)
+        elif content_length_hdr is not None:
+            body = b""
+        else:
+            body = None
+
         if content_length_hdr is not None:
             try:
-                if int(content_length_hdr) != (len(body) if body else 0):
+                if int(content_length_hdr) != len(body if body is not None else b""):
                     try:
                         self.connection.reset_stream(stream_id, error_code=h2.errors.ErrorCodes.PROTOCOL_ERROR)
                     except Exception:
@@ -521,7 +533,7 @@ class H2Connection:
     def send_request(self, request: Request, authority: str) -> tuple[int, bytes]:
         stream_id = self.connection.get_next_available_stream_id()
         headers = H2.build_request_headers(request, authority, request.body)
-        has_body = bool(request.body)
+        has_body = request.body is not None
 
         self.connection.send_headers(stream_id, headers, end_stream=not has_body)
 
@@ -556,18 +568,28 @@ class H2Connection:
             if isinstance(event, h2.events.ResponseReceived):
                 status = 0
                 headers = Headers({})
+                valid = True
                 for name, value in event.headers:
                     if name == ":status":
                         try:
                             status = int(value)
+                            if not (100 <= status <= 999):
+                                raise ValueError
                         except ValueError:
-                            status = 0
+                            valid = False
+                            try:
+                                self.connection.reset_stream(event.stream_id, error_code=h2.errors.ErrorCodes.PROTOCOL_ERROR)
+                            except Exception:
+                                pass
+                            out_events.append(("reset", event.stream_id))
+                            break
                     elif not name.startswith(":"):
                         headers.append(name, value)
 
-                out_events.append(("response", event.stream_id, status, headers))
-                if event.stream_ended:
-                    out_events.append(("end", event.stream_id))
+                if valid:
+                    out_events.append(("response", event.stream_id, status, headers))
+                    if event.stream_ended:
+                        out_events.append(("end", event.stream_id))
 
             elif isinstance(event, h2.events.DataReceived):
                 if event.stream_id in self.websocket_streams:

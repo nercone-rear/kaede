@@ -133,12 +133,13 @@ class TestHeaderFields:
 # RFC 9110 §8.6 / RFC 9112 §6.3: Content-Length
 
 class TestContentLength:
-    def test_content_length_zero_body_none(self):
+    def test_content_length_zero_body_empty(self):
+        # RFC 9110 §8.6: Content-Length: 0 means an explicit empty body, not absent body
         req = H1.parse_request(
             b"POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n",
             client=CLIENT,
         )
-        assert req.body is None
+        assert req.body == b""
 
     def test_content_length_exact(self):
         req = H1.parse_request(
@@ -207,12 +208,13 @@ class TestChunkedEncoding:
         assert req.body == b"hello world"
 
     def test_empty_chunked_body(self):
+        # RFC 9112 §7.1: Transfer-Encoding: chunked with only terminal chunk = explicit empty body
         req = H1.parse_request(
             b"POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"
             b"0\r\n\r\n",
             client=CLIENT,
         )
-        assert req.body is None
+        assert req.body == b""
 
     def test_chunk_extension_ignored(self):
         """RFC 9112 §7.1.1: chunk-ext values are ignored"""
@@ -448,12 +450,13 @@ class TestScanChunked:
         assert body == b"hello"
         assert offset == len(data)
 
-    def test_empty_returns_none_body(self):
+    def test_empty_returns_empty_body(self):
+        # RFC 9112 §7.1: terminal-only chunked body is an explicit empty body (b""), not absent (None)
         data = b"0\r\n\r\n"
         result = H1.scan_chunked(data)
         assert result is not None
         body, _ = result
-        assert body is None
+        assert body == b""
 
     def test_negative_chunk_size_raises(self):
         with pytest.raises(ValueError):
@@ -765,10 +768,10 @@ class TestDecodeChunkedDirect:
         body = H1.decode_chunked(b"3\r\nabc\r\n4\r\ndefg\r\n0\r\n\r\n")
         assert body == b"abcdefg"
 
-    def test_empty_body_returns_none(self):
-        """Zero-length chunked body must return None (no content)."""
+    def test_empty_body_returns_empty_bytes(self):
+        """RFC 9112 §7.1: zero-length chunked body is an explicit empty body (b""), not absent."""
         body = H1.decode_chunked(b"0\r\n\r\n")
-        assert body is None
+        assert body == b""
 
     def test_incomplete_data_raises_value_error(self):
         """Incomplete chunked body must raise ValueError."""

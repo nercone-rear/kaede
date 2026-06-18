@@ -112,7 +112,7 @@ class H1:
             if max_body_size is not None and n > max_body_size:
                 raise ValueError(f"Content-Length exceeds max_body_size: {n}")
 
-            body = rest[:n] if n > 0 else None
+            body = rest[:n]
 
         method = method_b.decode("ascii")
         if method not in ("GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"):
@@ -248,7 +248,7 @@ class H1:
                 if max_body_size is not None and n > max_body_size:
                     raise ValueError(f"Content-Length exceeds max_body_size: {n}")
 
-                body = rest[:n] if n > 0 else None
+                body = rest[:n]
 
             else:
                 body = bytes(rest) if rest else None
@@ -299,7 +299,7 @@ class H1:
                     if is_empty:
                         break
 
-                return bytes(body) if body else None, i
+                return bytes(body), i
 
             if len(data) < i + size + 2:
                 return None
@@ -967,6 +967,10 @@ class H1Connection:
 
         elif request.method in ("POST", "PUT", "PATCH", "DELETE"):
             request.headers.set("Content-Length", "0", override=False)
+
+        # RFC 9112 §3.2: HTTP/1.1 requests MUST include a Host header
+        if self.authority:
+            request.headers.set("Host", self.authority, override=False)
 
         request.headers.set("Connection", "keep-alive", override=False)
 
