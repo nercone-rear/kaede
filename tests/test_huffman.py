@@ -5,7 +5,7 @@ Both HPACK (HTTP/2) and QPACK (HTTP/3) use the same Huffman code defined in RFC 
 from __future__ import annotations
 
 import pytest
-from kaede.huffman import huffman_encode, huffman_decode, HUFFMAN_TABLE as HUFFMANtable
+from kaede.huffman import huffman_encode, huffman_decode, HUFFMAN_TABLE
 
 # RFC 7541 Appendix C test vectors (Huffman-encoded header values)
 
@@ -111,7 +111,7 @@ class TestEOSSymbol:
 
     def test_eos_code_is_30_bits(self):
         """RFC 7541 Appendix B: EOS is symbol 256 with code 0x3FFFFFFF, 30 bits"""
-        eos_code, eos_bits = HUFFMANtable[256]
+        eos_code, eos_bits = HUFFMAN_TABLE[256]
         assert eos_code == 0x3FFFFFFF
         assert eos_bits == 30
 
