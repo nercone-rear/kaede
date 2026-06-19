@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from kaede.models import Request, Headers
+from kaede.http.models import Request, Headers
 from kaede.websocket import PerMessageDeflate
 from kaede.handler.common import negotiate_websocket
 

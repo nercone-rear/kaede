@@ -13,7 +13,7 @@ import h2.errors
 import h2.events
 from h2.settings import SettingCodes
 
-from ..models import Request, Response, Headers, RawRequest, RawResponse
+from .models import Request, Response, RawRequest, RawResponse, Headers
 from ..tls import TLSInfo
 from ..process import process_request
 from ..websocket import WebSocket, WebSocketProtocolError, parse_frames

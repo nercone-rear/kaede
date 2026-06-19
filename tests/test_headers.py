@@ -5,7 +5,7 @@ RFC 9110 §5: Header Fields (case-insensitivity, multiple values, etc.)
 from __future__ import annotations
 
 import pytest
-from kaede.models import Headers
+from kaede.http.models import Headers
 
 class TestCaseInsensitivity:
     """RFC 9110 §5.1: Field names are case-insensitive"""

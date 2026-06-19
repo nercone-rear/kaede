@@ -18,7 +18,7 @@ import brotlicffi
 import pytest
 import zstandard
 
-from kaede.models import Headers, Request, Response
+from kaede.http.models import Headers, Request, Response
 
 CLIENT = (ipaddress.IPv4Address("127.0.0.1"), 12345)
 

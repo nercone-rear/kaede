@@ -5,7 +5,7 @@ Both HPACK (HTTP/2) and QPACK (HTTP/3) use the same Huffman code defined in RFC 
 from __future__ import annotations
 
 import pytest
-from kaede.huffman import huffman_encode, huffman_decode, HUFFMANtable
+from kaede.huffman import huffman_encode, huffman_decode, HUFFMAN_TABLE as HUFFMANtable
 
 # RFC 7541 Appendix C test vectors (Huffman-encoded header values)
 

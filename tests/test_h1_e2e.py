@@ -16,7 +16,8 @@ import socket
 import asyncio
 import pytest
 
-from kaede.models import Request, Response, Headers, Callback, Listener
+from kaede.http.models import Request, Response, Headers
+from kaede.api.models import Callback, Listener
 from kaede.api import server, client
 
 # ─────────────────────────────────────────────────────────

@@ -8,21 +8,16 @@ import email.utils
 from http import HTTPStatus
 from typing import Literal
 
-from ..models import Request, Response, Headers
+from .models import Request, Response, Headers
+from .errors import HTTPVersionNotSupportedError, HTTPMethodNotImplementedError
 from ..tls import TLSInfo
 from ..process import process_request
 from ..websocket import WebSocket, WebSocketProtocolError, compute_accept, parse_frames
+from ..constants import Characters
 from ..handler.common import StreamState, consume_response, negotiate_websocket, MAX_RESPONSE_HEADER_SIZE
 from ..handler.tcp import TCPProtocol
 
-TCHAR = frozenset(
-    b"!#$%&'*+-.^_`|~"
-    + bytes(range(0x30, 0x3A))   # 0-9
-    + bytes(range(0x41, 0x5B))   # A-Z
-    + bytes(range(0x61, 0x7B))   # a-z
-)
-
-HEXDIG = frozenset(b"0123456789abcdefABCDEF")
+CHARS_TOKEN = set("!#$%&'*+-.^_`|~") | Characters.DIGIT | Characters.LOWER | Characters.UPPER
 
 def clean_field_value(value_b: bytes) -> str:
     value = value_b.strip(b" \t")
@@ -32,29 +27,23 @@ def clean_field_value(value_b: bytes) -> str:
         raise ValueError("invalid control character in header field value")
     return value.decode("latin-1")
 
-class HTTPVersionNotSupportedError(ValueError):
-    pass
-
-class MethodNotImplementedError(ValueError):
-    pass
-
 class H1:
     @staticmethod
     def parse_request(data: bytes, *, client: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int], scheme: Literal["http", "https"] = "http", secure: bool = False, tls: TLSInfo | None = None, max_body_size: int | None = None) -> Request:
         head, sep, rest = data.partition(b"\r\n\r\n")
         if not sep:
-            raise ValueError("incomplete HTTP/1.1 request: missing header terminator")
+            raise ValueError("incomplete HTTP/1 request: missing header terminator")
 
         lines = head.split(b"\r\n")
         if not lines or not lines[0]:
-            raise ValueError("empty HTTP/1.1 request line")
+            raise ValueError("empty HTTP/1 request line")
 
         try:
             method_b, target_b, version_b = lines[0].split(b" ", 2)
         except ValueError:
-            raise ValueError("malformed HTTP/1.1 request line")
+            raise ValueError("malformed HTTP/1 request line")
 
-        if version_b != b"HTTP/1.1":
+        if not version_b.decode().startswith("HTTP/1"):
             raise HTTPVersionNotSupportedError(f"unsupported HTTP version: {version_b!r}")
 
         headers = Headers({})
@@ -68,21 +57,21 @@ class H1:
             name_b, sep_b, value_b = line.partition(b":")
 
             if not sep_b:
-                raise ValueError(f"malformed HTTP/1.1 header: {line!r}")
+                raise ValueError(f"malformed HTTP/1 header: {line!r}")
 
             if name_b != name_b.rstrip(b" \t"):
                 raise ValueError("whitespace before colon in header field name")
 
-            if not name_b or not all(c in TCHAR for c in name_b):
+            if not name_b or not all(chr(c) in CHARS_TOKEN for c in name_b):
                 raise ValueError(f"invalid character in header field name: {name_b!r}")
 
             headers.append(name_b.decode("latin-1"), clean_field_value(value_b))
 
         host_values = headers.headers.get("host", [])
         if not host_values:
-            raise ValueError("missing Host header in HTTP/1.1 request")
+            raise ValueError("missing Host header in HTTP/1 request")
         if len(host_values) > 1:
-            raise ValueError("multiple Host headers in HTTP/1.1 request")
+            raise ValueError("multiple Host headers in HTTP/1 request")
 
         body: bytes | None = None
         transfer_encoding = (headers.get("Transfer-Encoding") or "").lower()
@@ -126,7 +115,7 @@ class H1:
 
         method = method_b.decode("ascii")
         if method not in ("GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"):
-            raise MethodNotImplementedError(f"unknown HTTP method: {method!r}")
+            raise HTTPMethodNotImplementedError(f"unknown HTTP method: {method!r}")
 
         target = target_b.decode("latin-1")
         if not target:
@@ -134,7 +123,7 @@ class H1:
         if "\x00" in target or "\r" in target or "\n" in target:
             raise ValueError("invalid character in request target")
 
-        return Request(client=client, scheme=scheme, secure=secure, protocol="HTTP/1.1", method=method, target=target, headers=headers, body=body, h2=None, h3=None, tls=tls)
+        return Request(client=client, scheme=scheme, secure=secure, protocol=version_b.decode(), method=method, target=target, headers=headers, body=body, h2=None, h3=None, tls=tls)
 
     @staticmethod
     def build_response(response: Response) -> bytes | tuple[bytes, os.PathLike | None]:
@@ -187,16 +176,16 @@ class H1:
     def parse_response_head(head: bytes) -> tuple[int, str, Headers, bool]:
         lines = head.split(b"\r\n")
         if not lines or not lines[0]:
-            raise ValueError("empty HTTP/1.1 status line")
+            raise ValueError("empty HTTP/1 status line")
 
         parts = lines[0].split(b" ", 2)
         if len(parts) < 2:
-            raise ValueError("malformed HTTP/1.1 status line")
+            raise ValueError("malformed HTTP/1 status line")
 
         version_b, status_b = parts[0], parts[1]
         phrase = parts[2].decode("latin-1") if len(parts) > 2 else ""
 
-        if version_b not in (b"HTTP/1.1", b"HTTP/1.0"):
+        if not version_b.decode().startswith("HTTP/1"):
             raise ValueError(f"unsupported HTTP version: {version_b!r}")
 
         if not (len(status_b) == 3 and status_b.isascii() and status_b.isdigit()):
@@ -220,7 +209,7 @@ class H1:
             if name_b != name_b.rstrip(b" \t"):
                 raise ValueError("whitespace before colon in header field name")
 
-            if not name_b or not all(c in TCHAR for c in name_b):
+            if not name_b or not all(chr(c) in CHARS_TOKEN for c in name_b):
                 raise ValueError(f"invalid character in header field name: {name_b!r}")
 
             headers.append(name_b.decode("latin-1"), clean_field_value(value_b))
@@ -285,7 +274,7 @@ class H1:
 
             size_line = data[i:end].split(b";", 1)[0].rstrip(b" \t")
 
-            if not size_line or any(c not in HEXDIG for c in size_line):
+            if not size_line or any(c not in Characters.HEXDIG for c in size_line):
                 raise ValueError(f"invalid chunk size: {size_line!r}")
 
             size = int(size_line, 16)
@@ -546,7 +535,7 @@ class H1Connection:
                 self.send_error(505, "HTTP Version Not Supported")
                 self.transport.close()
                 return
-            except MethodNotImplementedError:
+            except HTTPMethodNotImplementedError:
                 self.send_error(501, "Not Implemented")
                 self.transport.close()
                 return
@@ -810,7 +799,7 @@ class H1Connection:
                 del self.buffer[:idx + 4]
 
                 try:
-                    status, _, headers, is_http10 = H1.parse_response_head(head)
+                    status, _, headers, protocol = H1.parse_response_head(head)
                 except ValueError as exc:
                     self.fail_request(exc)
                     return
@@ -820,7 +809,7 @@ class H1Connection:
 
                 self.headers = headers
 
-                if is_http10:
+                if protocol == "HTTP/1.0":
                     conn_hdr = (headers.get("Connection") or "").lower()
                     if "keep-alive" not in conn_hdr:
                         headers.set("Connection", "close", override=False)
@@ -900,7 +889,7 @@ class H1Connection:
             line = bytes(self.buffer[:end]).split(b";", 1)[0].rstrip(b" \t")
             del self.buffer[:end + 2]
 
-            if not line or any(c not in HEXDIG for c in line):
+            if not line or any(c not in Characters.HEXDIG for c in line):
                 self.fail_request(ValueError("invalid chunk size"))
                 return False
 

@@ -5,7 +5,7 @@ SETTINGS_ENABLE_CONNECT_PROTOCOL=1 but rejected extended CONNECT.
 """
 from __future__ import annotations
 
-from kaede.models import Callback
+from kaede.api.models import Callback
 
 class EchoWebSocket(Callback):
     async def on_websocket(self, request, ws):

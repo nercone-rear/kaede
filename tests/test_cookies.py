@@ -5,7 +5,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from kaede.http.cookies import Cookie, parse_cookie_header, parse_set_cookie
+from kaede.http.models import Cookie, Headers
+
+parse_cookie_header = Headers.parse_cookie
+parse_set_cookie = Headers.parse_set_cookie
 
 class TestParseCookieHeader:
     def test_single(self):

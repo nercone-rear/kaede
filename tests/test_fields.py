@@ -6,7 +6,13 @@ semicolon inside DQUOTEs is data, not a delimiter. Tests assert the RFC.
 """
 from __future__ import annotations
 
-from kaede.http.fields import split_list, unquote, parse_parameters, parse_qlist, parse_qvalue, is_token
+from kaede.common import split_list, unquote
+from kaede.http.fields import FieldValue
+
+parse_parameters = FieldValue.parse_parameters
+parse_qlist = FieldValue.parse_qlist
+parse_qvalue = FieldValue.parse_qvalue
+is_token = FieldValue.is_token
 
 class TestSplitList:
     def test_simple(self):

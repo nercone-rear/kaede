@@ -9,7 +9,7 @@ import pytest
 import h2.config
 import h2.connection
 import h2.errors
-from kaede.models import Request, Response, Headers, RawRequest
+from kaede.http.models import Request, Response, Headers, RawRequest
 from kaede.http.h2 import H2, H2Connection, H2Info, H2_FORBIDDEN_HEADERS
 
 FORBIDDEN = list(H2_FORBIDDEN_HEADERS)

@@ -10,10 +10,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from kaede.models import Request, Response, Headers, Callback
+from kaede.http.models import Request, Response, Headers
+from kaede.api.models import Callback
 from kaede.api.server import Config
 from kaede.process import process_request
-from kaede.http.date import format_http_date
+from kaede.http.date import HTTPDate
+
+format_http_date = HTTPDate.build
 
 LAST_MOD = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 LAST_MOD_STR = format_http_date(LAST_MOD)

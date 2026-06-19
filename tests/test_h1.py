@@ -7,8 +7,8 @@ from __future__ import annotations
 import pytest
 import ipaddress
 
-from kaede.models import Request, Response, Headers
-from kaede.http.h1 import H1, HTTPVersionNotSupportedError, MethodNotImplementedError
+from kaede.http.models import Request, Response, Headers
+from kaede.http.h1 import H1, HTTPVersionNotSupportedError, HTTPMethodNotImplementedError
 
 CLIENT = (ipaddress.IPv4Address("127.0.0.1"), 12345)
 
@@ -35,13 +35,8 @@ class TestRequestLine:
 
     def test_unknown_method_raises_501(self):
         """RFC 9110 §9: Unknown methods should result in 501"""
-        with pytest.raises(MethodNotImplementedError):
+        with pytest.raises(HTTPMethodNotImplementedError):
             H1.parse_request(b"BREW / HTTP/1.1\r\nHost: example.com\r\n\r\n", client=CLIENT)
-
-    def test_http10_raises_505(self):
-        """RFC 9112 §2.1: Only HTTP/1.1 is supported"""
-        with pytest.raises(HTTPVersionNotSupportedError):
-            H1.parse_request(b"GET / HTTP/1.0\r\nHost: example.com\r\n\r\n", client=CLIENT)
 
     def test_http20_raises_505(self):
         with pytest.raises(HTTPVersionNotSupportedError):

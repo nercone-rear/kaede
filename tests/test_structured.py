@@ -11,8 +11,16 @@ from decimal import Decimal
 
 import pytest
 
-from kaede.http import structured as sf
-from kaede.http.structured import Item, InnerList, Token, StructuredFieldError, parse, serialize
+from kaede.http.fields import StructuredFieldSerializer as sf
+from kaede.http.fields import StructuredFieldToken as Token, StructuredFieldParser, StructuredFieldSerializer
+from kaede.http.models import StructuredFieldItem as Item, StructuredFieldList as InnerList
+from kaede.http.errors import StructuredFieldError
+
+def parse(value: str, field_type: str):
+    return StructuredFieldParser(value).parse(field_type)
+
+def serialize(value) -> str:
+    return StructuredFieldSerializer.serialize(value)
 
 class TestBareItems:
     def test_integer(self):

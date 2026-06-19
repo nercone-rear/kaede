@@ -6,7 +6,7 @@ import ipaddress
 from dataclasses import dataclass
 
 from . import qpack
-from ..models import Request, Response, Headers
+from .models import Request, Response, Headers
 from ..process import process_request
 from ..quic import QUICConnection, HandshakeCompleted, StreamDataReceived, ConnectionTerminated
 from ..quic.tls import QuicTLS, QuicTLSServerContext
@@ -292,9 +292,6 @@ class H3Connection:
                 try:
                     self.qpack_decoder.feed_encoder_stream(bytes(buf))
                 except qpack.QpackError:
-                    # RFC 9204 §6.2: failure on the QPACK encoder stream is
-                    # signalled with QPACK_ENCODER_STREAM_ERROR (0x0201), not
-                    # QPACK_DECOMPRESSION_FAILED.
                     self.quic.close(0x0201, "QPACK encoder stream error")
                     return
 

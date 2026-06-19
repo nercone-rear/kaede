@@ -233,14 +233,14 @@ class H3Loopback:
         return await task
 
     async def request(self, method: str, path: str, *, headers=None, body=None, streaming: bool = False):
-        from kaede.models import Request, Headers
+        from kaede.http.models import Request, Headers
 
         hdrs = Headers(headers or {})
         request = Request(method=method, target=path, headers=hdrs, body=body, scheme="https", secure=True, protocol="HTTP/3.0")
         return await self.drive(self.client_h3.request(request, streaming))
 
     async def websocket(self, path: str = "/", subprotocols=None):
-        from kaede.models import Request, Headers
+        from kaede.http.models import Request, Headers
 
         request = Request(method="GET", target=path, headers=Headers({}), scheme="https", secure=True, protocol="HTTP/3.0")
         return await self.drive(self.client_h3.open_websocket(request, subprotocols=subprotocols))

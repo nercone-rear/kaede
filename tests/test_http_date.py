@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from kaede.http.date import parse_http_date, format_http_date, http_date_to_timestamp
+from kaede.http.date import HTTPDate
+
+parse_http_date = HTTPDate.parse
+format_http_date = HTTPDate.build
+http_date_to_timestamp = HTTPDate.to_timestamp
 
 # RFC 9110 §5.6.7 gives these three as equivalent representations of the same
 # instant: Sunday, November 6, 1994, 08:49:37 GMT.

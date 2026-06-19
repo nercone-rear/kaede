@@ -4,7 +4,8 @@ RFC 9204 (QPACK) and RFC 7541 §5.1 integer encoding conformance tests.
 from __future__ import annotations
 
 import pytest
-from kaede.http.qpack import QpackError, QpackBlocked, QpackDecoder, encode_integer, decode_integer, encode_string, decode_string, encode_headers, decode_headers, STATICtable, STATIC_INDEX_BY_HEADER, STATIC_INDEX_BY_NAME
+from kaede.http.qpack import QpackError, QpackBlocked, QpackDecoder, encode_integer, decode_integer, encode_string, decode_string, encode_headers, decode_headers, STATIC_INDEX_BY_HEADER, STATIC_INDEX_BY_NAME
+from kaede.http.qpack import STATIC_TABLE as STATICtable
 
 # RFC 7541 §5.1 / RFC 9204 §4.1.1: Integer Representation
 

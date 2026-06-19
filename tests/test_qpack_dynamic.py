@@ -10,7 +10,7 @@ from kaede.http.qpack import (
     QpackDecoder,
     encode_integer,
     encode_string,
-    STATICtable,
+    STATIC_TABLE as STATICtable,
 )
 
 

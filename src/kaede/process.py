@@ -9,107 +9,17 @@ import email.utils
 
 from typing import TYPE_CHECKING, Awaitable
 
-from .models import Request, Response, Headers, Callback
-from .http.fields import parse_qlist, split_list, etag_strong_match, etag_weak_match
-from .http.date import parse_http_date
+from .common import split_list
+from .http.date import HTTPDate
+from .http.models import Request, Response, Headers
+from .http.headers import ETag, AcceptEncoding
 
 if TYPE_CHECKING:
+    from .api import Callback
     from .api.client import Config as ClientConfig
     from .api.server import Config as ServerConfig
 
 NOT_MODIFIED_HEADERS = frozenset({"cache-control", "content-location", "date", "etag", "expires", "vary", "last-modified", "server",})
-
-def if_match_passes(field_value: str, etag: str, has_representation: bool = True) -> bool:
-    value = field_value.strip()
-
-    if value == "*":
-        return has_representation
-
-    if not etag:
-        return False
-
-    return any(etag_strong_match(tag, etag) for tag in split_list(value))
-
-def if_none_match_matches(field_value: str, etag: str, has_representation: bool = True) -> bool:
-    value = field_value.strip()
-
-    if value == "*":
-        return has_representation
-
-    if not etag:
-        return False
-
-    return any(etag_weak_match(tag, etag) for tag in split_list(value))
-
-def not_modified(response: Response) -> Response:
-    filtered = Headers({})
-    for key, values in response.headers.headers.items():
-        if key in NOT_MODIFIED_HEADERS:
-            for value in values:
-                filtered.append(key, value)
-
-    response.headers = filtered
-    response.status_code = 304
-    response.body = None
-    response.compressed = None
-    return response
-
-def precondition_failed(response: Response) -> Response:
-    for header in ("Content-Type", "Content-Encoding", "Transfer-Encoding", "Content-Range", "Accept-Ranges"):
-        response.headers.remove(header)
-
-    response.status_code = 412
-    response.body = None
-    response.compressed = None
-    response.headers.set("Content-Length", "0")
-    return response
-
-def evaluate_preconditions(request: Request, response: Response) -> Response | None:
-    if not (200 <= response.status_code < 300 or response.status_code == 412):
-        return None
-
-    is_safe = request.method in ("GET", "HEAD")
-    has_representation = response.body is not None or response.has_real_body or response.is_streaming
-
-    etag = (response.headers.get("ETag") or "").strip()
-    last_modified_raw = (response.headers.get("Last-Modified") or "").strip()
-    last_modified = parse_http_date(last_modified_raw) if last_modified_raw else None
-
-    if_match = request.headers.get("If-Match")
-    if_unmodified_since = request.headers.get("If-Unmodified-Since")
-    if_none_match = request.headers.get("If-None-Match")
-    if_modified_since = request.headers.get("If-Modified-Since")
-
-    if if_match is not None:
-        if not if_match_passes(if_match, etag, has_representation):
-            return precondition_failed(response)
-
-    elif if_unmodified_since is not None:
-        when = parse_http_date(if_unmodified_since)
-        if when is not None and last_modified is not None and last_modified > when:
-            return precondition_failed(response)
-
-    if if_none_match is not None:
-        if if_none_match_matches(if_none_match, etag, has_representation):
-            if is_safe:
-                return not_modified(response)
-            return precondition_failed(response)
-        return None
-
-    if is_safe and if_modified_since is not None:
-        when = parse_http_date(if_modified_since)
-        if when is not None and last_modified is not None and last_modified <= when:
-            return not_modified(response)
-
-    return None
-
-def parse_accept_encoding(accept_encoding: str) -> dict[str, float]:
-    result: dict[str, float] = {}
-
-    for token, q, _ in parse_qlist(accept_encoding or ""):
-        result[token] = q
-
-    return result
 
 def parse_one_range(spec: str, total: int) -> tuple[int, int] | str:
     if spec.startswith("-"):
@@ -177,17 +87,16 @@ def parse_ranges(value: str, total: int) -> list[tuple[int, int]] | None:
 
 def build_multipart_byteranges(parts: list[tuple[int, int, bytes]], total: int, content_type: str) -> tuple[bytes, str]:
     boundary = os.urandom(16).hex()
-    crlf = b"\r\n"
     out = bytearray()
 
     for start, end, data in parts:
-        out += b"--" + boundary.encode("ascii") + crlf
-        out += b"Content-Type: " + content_type.encode("latin-1") + crlf
-        out += f"Content-Range: bytes {start}-{end}/{total}".encode("ascii") + crlf
-        out += crlf
-        out += data + crlf
+        out += b"--" + boundary.encode("ascii") + b"\r\n"
+        out += b"Content-Type: " + content_type.encode("latin-1") + b"\r\n"
+        out += f"Content-Range: bytes {start}-{end}/{total}".encode("ascii") + b"\r\n"
+        out += b"\r\n"
+        out += data + b"\r\n"
 
-    out += b"--" + boundary.encode("ascii") + b"--" + crlf
+    out += b"--" + boundary.encode("ascii") + b"--" + b"\r\n"
     return bytes(out), f"multipart/byteranges; boundary={boundary}"
 
 def effective_range(request: Request, response: Response) -> str:
@@ -205,11 +114,89 @@ def effective_range(request: Request, response: Response) -> str:
     if if_range.startswith("W/"):
         return ""
     if if_range.startswith('"'):
-        return range_header if etag and etag_strong_match(if_range, etag) else ""
+        return range_header if etag and ETag.strong_match(if_range, etag) else ""
 
-    when = parse_http_date(if_range)
-    lm = parse_http_date(last_modified) if last_modified else None
+    when = HTTPDate.parse(if_range)
+    lm = HTTPDate.parse(last_modified) if last_modified else None
     return range_header if (when is not None and lm is not None and when == lm) else ""
+
+def evaluate_preconditions(request: Request, response: Response) -> Response | None:
+    if not (200 <= response.status_code < 300 or response.status_code == 412):
+        return None
+
+    is_safe = request.method in ("GET", "HEAD")
+    has_representation = response.body is not None or response.has_real_body or response.is_streaming
+
+    etag = (response.headers.get("ETag") or "").strip()
+    last_modified_raw = (response.headers.get("Last-Modified") or "").strip()
+    last_modified = HTTPDate.parse(last_modified_raw) if last_modified_raw else None
+
+    if_match = request.headers.get("If-Match")
+    if_unmodified_since = request.headers.get("If-Unmodified-Since")
+    if_none_match = request.headers.get("If-None-Match")
+    if_modified_since = request.headers.get("If-Modified-Since")
+
+    def if_match_passes(field_value: str, etag: str, has_representation: bool = True) -> bool:
+        value = field_value.strip()
+        if value == "*":
+            return has_representation
+        if not etag:
+            return False
+        return any(ETag.strong_match(tag, etag) for tag in split_list(value))
+
+    def if_none_match_matches(field_value: str, etag: str, has_representation: bool = True) -> bool:
+        value = field_value.strip()
+        if value == "*":
+            return has_representation
+        if not etag:
+            return False
+        return any(ETag.weak_match(tag, etag) for tag in split_list(value))
+
+    if if_match is not None:
+        if not if_match_passes(if_match, etag, has_representation):
+            return precondition_failed(response)
+
+    elif if_unmodified_since is not None:
+        when = HTTPDate.parse(if_unmodified_since)
+        if when is not None and last_modified is not None and last_modified > when:
+            return precondition_failed(response)
+
+    if if_none_match is not None:
+        if if_none_match_matches(if_none_match, etag, has_representation):
+            if is_safe:
+                return not_modified(response)
+            return precondition_failed(response)
+        return None
+
+    if is_safe and if_modified_since is not None:
+        when = HTTPDate.parse(if_modified_since)
+        if when is not None and last_modified is not None and last_modified <= when:
+            return not_modified(response)
+
+    return None
+
+def not_modified(response: Response) -> Response:
+    filtered = Headers({})
+    for key, values in response.headers.headers.items():
+        if key in NOT_MODIFIED_HEADERS:
+            for value in values:
+                filtered.append(key, value)
+
+    response.headers = filtered
+    response.status_code = 304
+    response.body = None
+    response.compressed = None
+    return response
+
+def precondition_failed(response: Response) -> Response:
+    for header in ("Content-Type", "Content-Encoding", "Transfer-Encoding", "Content-Range", "Accept-Ranges"):
+        response.headers.remove(header)
+
+    response.status_code = 412
+    response.body = None
+    response.compressed = None
+    response.headers.set("Content-Length", "0")
+    return response
 
 def error_response(request: Request, config: ServerConfig) -> Response:
     response = Response(b"Internal Server Error", status_code=500, compression=False, minification=False)
@@ -267,7 +254,7 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
         if response.has_real_body:
             await response.minify(html=config.minify_html, css=config.minify_css, js=config.minify_js, svg=config.minify_svg, keep_html_comments=config.minify_keep_html_comments)
 
-            if response.status_code == 200 and request.method == "GET":
+            if response.status_code == 200 and request.method in ("GET", "HEAD"):
                 response.headers.set("Accept-Ranges", "bytes", override=False)
 
             range_header = effective_range(request, response) if request.method == "GET" and response.status_code == 200 else ""
@@ -300,18 +287,18 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
                     response.status_code = 206
 
             if response.status_code != 206:
-                await response.compress(parse_accept_encoding(request.headers.get("Accept-Encoding", "")))
+                await response.compress(AcceptEncoding.parse(request.headers.get("Accept-Encoding", "")))
 
             response.headers.set("Content-Type", response.content_type or response.headers.get("Content-Type") or "application/octet-stream")
             response.headers.set("Content-Length", str(len(response.body)))
 
         elif response.is_streaming:
-            await response.compress(parse_accept_encoding(request.headers.get("Accept-Encoding", "")))
+            await response.compress(AcceptEncoding.parse(request.headers.get("Accept-Encoding", "")))
 
             response.headers.set("Content-Type", response.content_type or response.headers.get("Content-Type") or "application/octet-stream")
             response.headers.remove("Content-Length")
 
-            if request.protocol == "HTTP/1.1" and not (100 <= response.status_code < 200 or response.status_code in (204, 205, 304)):
+            if request.protocol.startswith("HTTP/1") and not (100 <= response.status_code < 200 or response.status_code in (204, 205, 304)):
                 response.headers.set("Transfer-Encoding", "chunked")
 
         elif response.body is not None:
@@ -367,7 +354,7 @@ async def process_request(request: Request, callback: Callback, config: ServerCo
                 response.headers.set("Content-Length", str(len(body)))
 
             else:
-                await response.compress(parse_accept_encoding(request.headers.get("Accept-Encoding", "")))
+                await response.compress(AcceptEncoding.parse(request.headers.get("Accept-Encoding", "")))
 
                 if response.has_real_body:
                     response.headers.remove("Accept-Ranges")

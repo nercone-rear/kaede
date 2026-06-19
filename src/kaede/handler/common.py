@@ -4,7 +4,7 @@ import asyncio
 import ipaddress
 from typing import AsyncIterator
 
-from ..models import Request, Response, Headers
+from ..http.models import Request, Response, Headers
 from ..websocket import PerMessageDeflate
 
 MAX_RESPONSE_HEADER_SIZE = 64 * 1024

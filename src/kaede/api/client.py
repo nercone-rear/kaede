@@ -7,8 +7,7 @@ from urllib.parse import urlsplit
 from importlib.metadata import version
 
 from ..tls import TLSContext, TLSClientConfig
-from ..http import H1
-from ..models import Request, Response, Headers
+from ..http import H1, Request, Response, Headers
 from ..process import process_response
 from ..websocket import WebSocket, generate_key, check_accept
 from ..handler.tcp import TCPProtocol, WSClientProtocol

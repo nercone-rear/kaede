@@ -4,7 +4,7 @@ RFC 9114 (HTTP/3) and RFC 9000 (QUIC variable-length integer) conformance tests.
 from __future__ import annotations
 
 import pytest
-from kaede.models import Request, Response, Headers
+from kaede.http.models import Request, Response, Headers
 from kaede.http.h3 import H3, H3_FORBIDDEN_HEADERS, FRAME_DATA, FRAME_HEADERS, FRAME_SETTINGS, FRAME_GOAWAY, SETTINGS_QPACK_MAXtable_CAPACITY, SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_ENABLE_CONNECT_PROTOCOL, FORBIDDEN_H2_SETTINGS, STREAM_CONTROL, STREAM_QPACK_ENCODER, STREAMqpack_decoder
 from kaede.quic.packet import Buffer, encode_uint_var
 

@@ -4,9 +4,9 @@ import asyncio
 import ipaddress
 from typing import Callable
 
-from ..tls import TLS, TLSContext, TLSInfo
 from .common import parse_peername, MAX_RESPONSE_HEADER_SIZE
-from .tls_transport import TLSTransport, tls_start, tls_feed
+from .tls import TLSTransport, tls_start, tls_feed
+from ..tls import TLS, TLSContext, TLSInfo
 from ..websocket import WebSocket, WebSocketProtocolError, parse_frames
 
 ConnectionFactory = Callable[["TCPProtocol", "str | None"], "object | None"]

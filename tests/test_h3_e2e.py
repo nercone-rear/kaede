@@ -9,7 +9,8 @@ from __future__ import annotations
 import os
 import asyncio
 
-from kaede.models import Response, Headers, Callback
+from kaede.http.models import Response, Headers
+from kaede.api.models import Callback
 
 
 # ─────────────────────────────────────────────────────────
@@ -169,9 +170,9 @@ class TestConcurrentRequests:
 
         paths = [f"/stream/{i}" for i in range(5)]
         tasks = [asyncio.ensure_future(lb.client_h3.request(
-            __import__("kaede.models", fromlist=["Request", "Headers"]).Request(
+            __import__("kaede.http.models", fromlist=["Request", "Headers"]).Request(
                 method="GET", target=path,
-                headers=__import__("kaede.models", fromlist=["Headers"]).Headers({}),
+                headers=__import__("kaede.http.models", fromlist=["Headers"]).Headers({}),
                 scheme="https", secure=True, protocol="HTTP/3.0",
             ),
             streaming=False,
@@ -257,7 +258,7 @@ class TestHeaders:
                 val = request.headers.get("X-Test") or ""
                 return Response(val.encode(), content_type="text/plain")
 
-        from kaede.models import Request, Headers as Hdrs
+        from kaede.http.models import Request, Headers as Hdrs
         lb = h3_loopback(ReqHdrCallback())
         await lb.handshake()
         resp = await lb.request("GET", "/", headers=Hdrs({"X-Test": "h3-sentinel"}))

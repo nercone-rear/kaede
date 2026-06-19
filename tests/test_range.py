@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from kaede.models import Request, Response, Headers, Callback
+from kaede.http.models import Request, Response, Headers
+from kaede.api.models import Callback
 from kaede.api.server import Config
 from kaede.process import process_request, parse_ranges
-from kaede.http.date import format_http_date
+from kaede.http.date import HTTPDate
+
+format_http_date = HTTPDate.build
 from datetime import datetime, timezone
 
 BODY = b"0123456789"

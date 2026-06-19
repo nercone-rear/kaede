@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import hmac
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from . import frame as frames
 from . import packet
