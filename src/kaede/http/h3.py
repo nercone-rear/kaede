@@ -188,6 +188,8 @@ class H3Connection:
         self.peer_settings_received: bool = False
         self.peer_max_field_section_size: int | None = None
         self.peer_enable_connect: bool = False
+        self.peer_goaway_id: int | None = None
+        self.blocked_header_streams: set[int] = set()
 
         # server state
         self.client = peername(addr) if addr is not None else (ipaddress.IPv4Address("0.0.0.0"), 0)
@@ -250,11 +252,11 @@ class H3Connection:
                 self.feed_request_stream(sid, event.data, event.end_stream, out)
 
             else:
-                self.feed_uni_stream(sid, event.data, event.end_stream)
+                self.feed_uni_stream(sid, event.data, event.end_stream, out)
 
         return out
 
-    def feed_uni_stream(self, sid: int, data: bytes, end_stream: bool):
+    def feed_uni_stream(self, sid: int, data: bytes, end_stream: bool, out: list):
         buf = self.uni_buffers.setdefault(sid, bytearray())
 
         if sid not in self.peer_uni_types:
@@ -278,6 +280,10 @@ class H3Connection:
 
         stream_type = self.peer_uni_types.get(sid)
 
+        if end_stream and stream_type in (STREAM_CONTROL, STREAM_QPACK_ENCODER, STREAMqpack_decoder):
+            self.quic.close(0x0104, "H3_CLOSED_CRITICAL_STREAM")
+            return
+
         if stream_type == STREAM_CONTROL:
             self.parse_control_stream(sid, buf)
 
@@ -290,6 +296,11 @@ class H3Connection:
                     return
 
                 del buf[:]
+
+                for unblocked_sid, headers in self.qpack_decoder.take_unblocked():
+                    self.blocked_header_streams.discard(unblocked_sid)
+                    out.append(HeadersReceived(unblocked_sid, headers, stream_ended=False))
+                    self.feed_request_stream(unblocked_sid, b"", False, out)
 
         elif len(buf) > 65536:
             del self.uni_buffers[sid]
@@ -322,6 +333,13 @@ class H3Connection:
             elif frame_type == FRAME_SETTINGS:
                 self.quic.close(0x0105, "H3_FRAME_UNEXPECTED")
                 return
+
+            elif frame_type == FRAME_GOAWAY:
+                try:
+                    self.peer_goaway_id = Buffer(payload).pull_uint_var()
+                except Exception:
+                    self.quic.close(0x0109, "H3_SETTINGS_ERROR")
+                    return
 
     def apply_peer_settings(self, payload: bytes):
         reader = Buffer(payload)
@@ -356,6 +374,10 @@ class H3Connection:
     def feed_request_stream(self, sid: int, data: bytes, end_stream: bool, out: list):
         buf = self.request_buffers.setdefault(sid, bytearray())
 
+        if sid in self.blocked_header_streams:
+            buf.extend(data)
+            return
+
         if len(buf) + len(data) > self.max_body_size + (self.handler.config.max_header_size if self.handler else 65536):
             asm = self.assemblers.get(sid)
             if asm is not None:
@@ -388,6 +410,11 @@ class H3Connection:
             if frame_type == FRAME_HEADERS:
                 try:
                     headers = self.qpack_decoder.decode_field_section(payload, stream_id=sid)
+
+                except qpack.QpackBlocked:
+                    self.blocked_header_streams.add(sid)
+                    return
+
                 except qpack.QpackError:
                     self.quic.close(0x0200, "QPACK decompression failed")
                     return
@@ -826,6 +853,7 @@ class H3Connection:
 
         if isinstance(ev, HeadersReceived):
             status = 0
+            status_seen = False
             headers = Headers({})
 
             for nameb, valueb in ev.headers:
@@ -833,6 +861,7 @@ class H3Connection:
                 value = valueb.decode("utf-8", "replace") if isinstance(valueb, (bytes, bytearray)) else valueb
 
                 if name == ":status":
+                    status_seen = True
                     try:
                         status = int(value)
                     except ValueError:
@@ -840,6 +869,10 @@ class H3Connection:
 
                 elif not name.startswith(":"):
                     headers.append(name, value)
+
+            if not status_seen:
+                self.quic.close(0x010E, "H3_MESSAGE_ERROR")
+                return
 
             state.set_headers(status, headers)
 

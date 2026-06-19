@@ -62,6 +62,17 @@ class TestBareItems:
         assert isinstance(parse("abc", "item").value, Token)
         assert not isinstance(parse('"abc"', "item").value, Token)
 
+    def test_token_start_must_be_ascii_alpha(self):
+        # RFC 8941 §4.2.6: token must start with ALPHA (ASCII only) or '*'
+        # Unicode alphabetic characters are NOT valid token start characters
+        with pytest.raises(StructuredFieldError):
+            parse("é=1", "item")  # U+00E9 LATIN SMALL LETTER E WITH ACUTE
+
+    def test_token_unicode_alpha_rejected(self):
+        # Broader Unicode letters must not be accepted as token start
+        with pytest.raises(StructuredFieldError):
+            parse("中abc", "item")  # CJK character
+
     def test_byte_sequence(self):
         v = parse(":cHJldGVuZCB0aGlzIGlzIGJpbmFyeSBjb250ZW50Lg==:", "item").value
         assert v == b"pretend this is binary content."

@@ -64,6 +64,8 @@ class QpackDecoder:
         self.enc_buf: bytearray = bytearray()
         self.dec_pending: bytearray = bytearray()
         self.ici_pending: int = 0
+        self.blocked: dict[int, bytes] = {}
+        self.blocked_ric: dict[int, int] = {}
 
     def feed_encoder_stream(self, data: bytes) -> None:
         self.enc_buf.extend(data)
@@ -130,6 +132,21 @@ class QpackDecoder:
         if inserted > 0:
             self.ici_pending += inserted
 
+    def take_unblocked(self) -> list[tuple[int, list[tuple[bytes, bytes]]]]:
+        result: list[tuple[int, list[tuple[bytes, bytes]]]] = []
+        unblocked = [sid for sid, ric in self.blocked_ric.items() if ric <= self.table.insert_count]
+        for sid in unblocked:
+            data = self.blocked.pop(sid)
+            del self.blocked_ric[sid]
+
+            try:
+                headers = self.decode_field_section(data, stream_id=None)
+                result.append((sid, headers))
+            except QpackError:
+                pass
+
+        return result
+
     def decode_field_section(self, data: bytes, stream_id: int | None = None) -> list[tuple[bytes, bytes]]:
         if not data:
             return []
@@ -165,6 +182,10 @@ class QpackDecoder:
                 raise QpackError("invalid Required Insert Count after decoding")
 
         if ric > self.table.insert_count:
+            if stream_id is not None:
+                self.blocked[stream_id] = data
+                self.blocked_ric[stream_id] = ric
+                raise QpackBlocked(f"QPACK blocked stream: RIC={ric} > insert_count={self.table.insert_count}")
             raise QpackError(f"QPACK blocked stream: RIC={ric} > insert_count={self.table.insert_count}")
 
         if s_bit:
@@ -365,6 +386,9 @@ SENSITIVE_HEADERS: frozenset[bytes] = frozenset([
 ])
 
 class QpackError(Exception):
+    pass
+
+class QpackBlocked(QpackError):
     pass
 
 def encode_integer(value: int, prefix_bits: int, flags: int = 0) -> bytes:

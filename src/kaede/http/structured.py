@@ -128,7 +128,7 @@ class _Parser:
             return self.parse_integer_or_decimal()
         if c == '"':
             return self.parse_string()
-        if c.isalpha() or c == "*":
+        if (c.isascii() and c.isalpha()) or c == "*":
             return self.parse_token()
         if c == ":":
             return self.parse_byte_sequence()
@@ -349,7 +349,7 @@ def ser_string(value: str) -> str:
     return "".join(out)
 
 def ser_token(value: str) -> str:
-    if not value or (not value[0].isalpha() and value[0] != "*"):
+    if not value or ((not value[0].isascii() or not value[0].isalpha()) and value[0] != "*"):
         raise StructuredFieldError("invalid token")
     if any(ch not in TCHAR and ch not in ":/" for ch in value[1:]):
         raise StructuredFieldError("invalid token character")

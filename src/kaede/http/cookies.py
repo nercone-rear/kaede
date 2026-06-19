@@ -22,9 +22,6 @@ def parse_cookie_header(value: str) -> list[tuple[str, str]]:
         name = name.strip()
         raw = raw.strip()
 
-        if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
-            raw = raw[1:-1]
-
         if name:
             pairs.append((name, raw))
 
@@ -88,7 +85,7 @@ def parse_set_cookie(value: str) -> Cookie | None:
     name, _, cookie_value = head.partition("=")
     name = name.strip()
     cookie_value = cookie_value.strip()
-    if not name:
+    if not name or any(ch not in TOKEN_CHARS for ch in name):
         return None
 
     cookie = Cookie(name=name, value=cookie_value)

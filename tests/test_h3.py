@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 from kaede.models import Request, Response, Headers
-from kaede.http.h3 import H3, H3_FORBIDDEN_HEADERS, FRAME_DATA, FRAME_HEADERS, FRAME_SETTINGS, SETTINGS_QPACK_MAXtable_CAPACITY, SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_ENABLE_CONNECT_PROTOCOL, FORBIDDEN_H2_SETTINGS
+from kaede.http.h3 import H3, H3_FORBIDDEN_HEADERS, FRAME_DATA, FRAME_HEADERS, FRAME_SETTINGS, FRAME_GOAWAY, SETTINGS_QPACK_MAXtable_CAPACITY, SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_ENABLE_CONNECT_PROTOCOL, FORBIDDEN_H2_SETTINGS, STREAM_CONTROL, STREAM_QPACK_ENCODER, STREAMqpack_decoder
 from kaede.quic.packet import Buffer, encode_uint_var
 
 # RFC 9000 §16: QUIC Variable-Length Integer Encoding
@@ -444,3 +444,120 @@ class TestEncodeUintVarEdgeCases:
 
     def test_boundary_1073741824_is_eight_bytes(self):
         assert len(encode_uint_var(1073741824)) == 8
+
+
+class TestH3ControlStreamFIN:
+    """RFC 9114 §6.2.1-3: FIN on critical streams is H3_CLOSED_CRITICAL_STREAM."""
+
+    def _make_close_error_code(self, quic_stub):
+        """Return the error code set on the quic stub."""
+        return getattr(quic_stub, "_close_code", None)
+
+    def _quic_stub(self):
+        class QuicStub:
+            _close_code = None
+            _close_reason = None
+            def close(self, code, reason="", application=True):
+                self._close_code = code
+                self._close_reason = reason
+        return QuicStub()
+
+    def _make_buf_with_type(self, stream_type: int) -> bytes:
+        return encode_uint_var(stream_type)
+
+    def test_fin_on_control_stream_triggers_h3_closed_critical_stream(self):
+        """RFC 9114 §6.2.1: FIN on control stream MUST be H3_CLOSED_CRITICAL_STREAM (0x0104)."""
+        from kaede.http.h3 import H3Connection
+        quic = self._quic_stub()
+
+        class FakeH3(H3Connection):
+            def __init__(self):
+                self.quic = quic
+                self.peer_uni_types = {}
+                self.uni_buffers = {}
+                self.peer_control_stream_id = None
+                self.qpack_decoder = __import__("kaede.http.qpack", fromlist=["QpackDecoder"]).QpackDecoder()
+                self.blocked_header_streams = set()
+
+        h3 = FakeH3()
+        # Simulate receiving the stream type byte + FIN
+        h3.feed_uni_stream(3, encode_uint_var(STREAM_CONTROL), end_stream=True, out=[])
+        assert quic._close_code == 0x0104, f"Expected 0x0104 but got {quic._close_code:#06x}"
+
+    def test_fin_on_qpack_encoder_stream_triggers_h3_closed_critical_stream(self):
+        """RFC 9114 §6.2.2: FIN on QPACK encoder stream MUST be H3_CLOSED_CRITICAL_STREAM (0x0104)."""
+        from kaede.http.h3 import H3Connection
+        quic = self._quic_stub()
+
+        class FakeH3(H3Connection):
+            def __init__(self):
+                self.quic = quic
+                self.peer_uni_types = {}
+                self.uni_buffers = {}
+                self.peer_control_stream_id = None
+                self.qpack_decoder = __import__("kaede.http.qpack", fromlist=["QpackDecoder"]).QpackDecoder()
+                self.blocked_header_streams = set()
+
+        h3 = FakeH3()
+        h3.feed_uni_stream(3, encode_uint_var(STREAM_QPACK_ENCODER), end_stream=True, out=[])
+        assert quic._close_code == 0x0104
+
+    def test_fin_on_qpack_decoder_stream_triggers_h3_closed_critical_stream(self):
+        """RFC 9114 §6.2.3: FIN on QPACK decoder stream MUST be H3_CLOSED_CRITICAL_STREAM (0x0104)."""
+        from kaede.http.h3 import H3Connection
+        quic = self._quic_stub()
+
+        class FakeH3(H3Connection):
+            def __init__(self):
+                self.quic = quic
+                self.peer_uni_types = {}
+                self.uni_buffers = {}
+                self.peer_control_stream_id = None
+                self.qpack_decoder = __import__("kaede.http.qpack", fromlist=["QpackDecoder"]).QpackDecoder()
+                self.blocked_header_streams = set()
+
+        h3 = FakeH3()
+        h3.feed_uni_stream(3, encode_uint_var(STREAMqpack_decoder), end_stream=True, out=[])
+        assert quic._close_code == 0x0104
+
+
+class TestH3GoawayHandling:
+    """RFC 9114 §5.2: GOAWAY frame on control stream must be processed."""
+
+    def _make_control_stream_with_settings_and_goaway(self, stream_id_val: int) -> bytes:
+        settings_payload = b""
+        settings_frame = H3.encode_frame(FRAME_SETTINGS, settings_payload)
+        goaway_payload = encode_uint_var(stream_id_val)
+        goaway_frame = H3.encode_frame(FRAME_GOAWAY, goaway_payload)
+        return encode_uint_var(STREAM_CONTROL) + settings_frame + goaway_frame
+
+    def test_goaway_stores_peer_goaway_id(self):
+        """RFC 9114 §5.2: GOAWAY stream ID must be stored."""
+        from kaede.http.h3 import H3Connection
+
+        class QuicStub:
+            _close_code = None
+            def close(self, code, reason="", application=True):
+                self._close_code = code
+            def send_stream_data(self, *a, **kw): pass
+
+        class FakeH3(H3Connection):
+            def __init__(self):
+                self.quic = QuicStub()
+                self.peer_uni_types = {}
+                self.uni_buffers = {}
+                self.peer_control_stream_id = None
+                self.peer_settings_received = False
+                self.peer_max_field_section_size = None
+                self.peer_enable_connect = False
+                self.peer_goaway_id = None
+                self.is_client = True
+                self.control_stream_id = None
+                self.qpack_decoder = __import__("kaede.http.qpack", fromlist=["QpackDecoder"]).QpackDecoder()
+                self.blocked_header_streams = set()
+
+        h3 = FakeH3()
+        data = self._make_control_stream_with_settings_and_goaway(4)
+        h3.feed_uni_stream(3, data, end_stream=False, out=[])
+        assert h3.peer_goaway_id == 4
+        assert h3.quic._close_code is None  # no error on valid GOAWAY

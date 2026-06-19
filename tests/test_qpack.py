@@ -4,7 +4,7 @@ RFC 9204 (QPACK) and RFC 7541 §5.1 integer encoding conformance tests.
 from __future__ import annotations
 
 import pytest
-from kaede.http.qpack import QpackError, encode_integer, decode_integer, encode_string, decode_string, encode_headers, decode_headers, STATICtable, STATIC_INDEX_BY_HEADER, STATIC_INDEX_BY_NAME
+from kaede.http.qpack import QpackError, QpackBlocked, QpackDecoder, encode_integer, decode_integer, encode_string, decode_string, encode_headers, decode_headers, STATICtable, STATIC_INDEX_BY_HEADER, STATIC_INDEX_BY_NAME
 
 # RFC 7541 §5.1 / RFC 9204 §4.1.1: Integer Representation
 
@@ -307,3 +307,90 @@ class TestStringEncodingHuffman:
         encoded = length_enc + huffman_bytes
         decoded, _ = decode_string(encoded, 0, 7)
         assert decoded == value
+
+
+class TestQpackBlocking:
+    """RFC 9204 §2.1.2: blocked streams must wait, not error."""
+
+    def _make_blocked_field_section(self, decoder: QpackDecoder, required_insert_count: int) -> bytes:
+        """Build a minimal QPACK field section header that references enc_ric entries.
+        This uses the encoded RIC / base prefix encoding from RFC 9204 §3.2.6.
+        """
+        max_entries = decoder.table.max_entries
+        assert max_entries > 0, "decoder must have capacity > 0 for dynamic refs"
+        full_range = 2 * max_entries
+        enc_ric = (required_insert_count % full_range) + 1
+        # S=0, delta_base=0 → base = required_insert_count
+        prefix = encode_integer(enc_ric, 8) + bytes([0x00])
+        return prefix
+
+    def test_blocked_raises_qpack_blocked_not_qpack_error(self):
+        """When RIC > insert_count, QpackBlocked (not a generic error) must be raised."""
+        decoder = QpackDecoder(max_capacity=4096)
+        decoder.table.set_capacity(4096)
+        # Required Insert Count = 1, but table is empty (insert_count=0)
+        data = self._make_blocked_field_section(decoder, 1)
+        with pytest.raises(QpackBlocked):
+            decoder.decode_field_section(data, stream_id=4)
+
+    def test_blocked_stream_stored_for_later(self):
+        """After QpackBlocked, the stream data must be buffered for retry."""
+        decoder = QpackDecoder(max_capacity=4096)
+        decoder.table.set_capacity(4096)
+        data = self._make_blocked_field_section(decoder, 1)
+        try:
+            decoder.decode_field_section(data, stream_id=4)
+        except QpackBlocked:
+            pass
+        assert 4 in decoder._blocked
+
+    def test_no_blocked_without_stream_id(self):
+        """Without a stream_id, a blocked reference MUST raise QpackError (not QpackBlocked)."""
+        decoder = QpackDecoder(max_capacity=4096)
+        decoder.table.set_capacity(4096)
+        data = self._make_blocked_field_section(decoder, 1)
+        with pytest.raises(QpackError) as exc_info:
+            decoder.decode_field_section(data, stream_id=None)
+        assert not isinstance(exc_info.value, QpackBlocked)
+
+    def test_take_unblocked_empty_before_insertion(self):
+        """take_unblocked must return nothing if required entries haven't arrived."""
+        decoder = QpackDecoder(max_capacity=4096)
+        decoder.table.set_capacity(4096)
+        data = self._make_blocked_field_section(decoder, 2)
+        try:
+            decoder.decode_field_section(data, stream_id=4)
+        except QpackBlocked:
+            pass
+        assert decoder.take_unblocked() == []
+
+    def _make_encoder_insert(self, name: bytes, value: bytes) -> bytes:
+        """Build an encoder stream 'insert with literal name' instruction."""
+        return encode_string(name, 5, 0x40) + encode_string(value, 7, 0)
+
+    def test_blocked_clears_after_take_unblocked(self):
+        """After take_unblocked delivers a stream, it must not appear again."""
+        decoder = QpackDecoder(max_capacity=4096)
+        decoder.table.set_capacity(4096)
+
+        # Insert one entry so insert_count=1
+        decoder.feed_encoder_stream(self._make_encoder_insert(b"x-test", b"v"))
+        assert decoder.table.insert_count == 1
+
+        data = self._make_blocked_field_section(decoder, 2)  # requires 2 entries
+        try:
+            decoder.decode_field_section(data, stream_id=4)
+        except QpackBlocked:
+            pass
+
+        assert decoder.take_unblocked() == []
+
+        # Insert another entry to meet RIC=2
+        decoder.feed_encoder_stream(self._make_encoder_insert(b"x-b", b"w"))
+        assert decoder.table.insert_count == 2
+
+        results = decoder.take_unblocked()
+        assert any(sid == 4 for sid, _ in results)
+
+        # Must not appear again
+        assert decoder.take_unblocked() == []

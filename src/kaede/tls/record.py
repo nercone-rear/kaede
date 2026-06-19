@@ -137,6 +137,9 @@ class TLS:
             if err in (SSL_ERROR_WANT_READ, SSL_ERROR_WANT_WRITE):
                 break
 
+            if err == SSL_ERROR_ZERO_RETURN:
+                ssl.SSL_shutdown(self.SSL)
+
             self.closed = True
             break
 
@@ -185,7 +188,9 @@ class TLS:
 
     def shutdown(self):
         if self.SSL:
-            self.lib.ssl.SSL_shutdown(self.SSL)
+            ret = self.lib.ssl.SSL_shutdown(self.SSL)
+            if ret == 0:
+                self.lib.ssl.SSL_shutdown(self.SSL)
 
     def selected_alpn(self) -> str | None:
         return self.lib.selected_alpn(self.SSL)

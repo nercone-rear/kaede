@@ -196,6 +196,7 @@ class QUICConnection:
 
         self.remote_cid_set = not is_client
         self.path_response_pending: bytes | None = None
+        self.ping_pending: bool = False
         self.needs_advance = True
         self.buffered_packets: list[bytes] = []
 
@@ -1116,6 +1117,11 @@ class QUICConnection:
                     self.handshake_done_pending = False
                     ack_eliciting = True
 
+                if self.ping_pending and max_len - len(payload) > 4:
+                    payload += frames.Ping().encode()
+                    self.ping_pending = False
+                    ack_eliciting = True
+
             if self.streams_blocked_bidi and max_len - len(payload) > 16:
                 payload += frames.StreamsBlocked(self.max_bidi_streams or 0, bidi=True).encode()
                 self.streams_blocked_bidi = False
@@ -1297,3 +1303,7 @@ class QUICConnection:
 
         probes = self.recovery.on_timeout(now)
         self.on_lost(probes)
+
+        if self.recovery.ping_needed:
+            self.recovery.ping_needed = False
+            self.ping_pending = True

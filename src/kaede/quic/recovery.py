@@ -64,6 +64,7 @@ class Recovery:
         self.congestion_recovery_start_time = 0.0
 
         self.peer_max_ack_delay = 0.025
+        self.ping_needed: bool = False
 
     def on_packet_sent(self, packet: SentPacket):
         space = self.spaces[packet.space]
@@ -241,5 +242,8 @@ class Recovery:
             if eliciting:
                 eliciting.sort(key=lambda p: p.packet_number)
                 probes.extend(eliciting[:2])
+
+        if not probes:
+            self.ping_needed = True
 
         return probes
