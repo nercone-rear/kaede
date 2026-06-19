@@ -220,7 +220,6 @@ def serialize_long_header_prefix(packet_type: int, version: int, dcid: bytes, sc
     return buf.data, first
 
 def build_retry(dcid: bytes, scid: bytes, token: bytes, original_dcid: bytes) -> bytes:
-    # RFC 9000 §17.2.5 Retry packet + RFC 9001 §5.8 Retry Integrity Tag.
     from .crypto import retry_integrity_tag
 
     buf = Buffer()

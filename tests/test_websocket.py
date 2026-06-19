@@ -394,14 +394,27 @@ class TestTextEncoding:
 class TestCloseCodeValidity:
     """RFC 6455 §7.4.2: Reserved/invalid codes must not be echoed"""
 
-    @pytest.mark.parametrize("code", [1004, 1005, 1006])
-    def test_reserved_close_codes_not_echoed(self, code):
-        """RFC 6455 §7.4.2: codes 1004, 1005, 1006 must never be echoed"""
+    @pytest.mark.parametrize("code", [1005, 1006])
+    def test_reserved_close_codes_responded_with_1002(self, code):
+        """RFC 6455 §7.4.2: codes 1005 and 1006 MUST NOT appear in Close
+        frames; respond with 1002 (protocol error)."""
         ws, transport = make_ws(require_masking=False)
         feed(ws, build_frame(Opcode.CLOSE, struct.pack(">H", code)))
         frames = parse_written(transport)
         close = next(f for f in frames if f.opcode == Opcode.CLOSE)
-        assert close.payload == b""
+        assert len(close.payload) >= 2
+        assert struct.unpack(">H", close.payload[:2])[0] == 1002
+
+    def test_code_1004_not_echoed(self):
+        """RFC 6455 §7.4.2: code 1004 is reserved and not in the allowed
+        send set — must not be echoed."""
+        ws, transport = make_ws(require_masking=False)
+        feed(ws, build_frame(Opcode.CLOSE, struct.pack(">H", 1004)))
+        frames = parse_written(transport)
+        close = next(f for f in frames if f.opcode == Opcode.CLOSE)
+        if len(close.payload) >= 2:
+            echoed = struct.unpack(">H", close.payload[:2])[0]
+            assert echoed != 1004
 
     @pytest.mark.parametrize("code", [0, 999, 1012, 2999, 5000])
     def test_invalid_close_codes_not_echoed(self, code):

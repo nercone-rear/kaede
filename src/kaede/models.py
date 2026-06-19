@@ -42,7 +42,7 @@ class Request:
     compressed: bytes | AsyncIterator[bytes] | None = None
     minified: bytes | AsyncIterator[bytes] | None = None
 
-    protocol: Literal["HTTP/1.1", "HTTP/2.0", "HTTP/3.0"] = "HTTP/1.1"
+    protocol: Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"] = "HTTP/1.1"
 
     h2: H2Info | None = None
     h3: H3Info | None = None
@@ -171,7 +171,7 @@ class Response:
     compressed: bytes | AsyncIterator[bytes] | None = None
     minified: bytes | AsyncIterator[bytes] | None = None
 
-    protocol: Literal["HTTP/1.1", "HTTP/2.0", "HTTP/3.0"] = "HTTP/1.1"
+    protocol: Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"] = "HTTP/1.1"
 
     file_range: tuple[int, int] | None = field(default=None)
 

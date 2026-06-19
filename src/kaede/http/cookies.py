@@ -5,21 +5,10 @@ from datetime import datetime
 
 from .date import format_http_date
 
-# RFC 6265: HTTP State Management Mechanism.
-
-_TOKEN_CHARS = set("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-# cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E (no CTL, SP, DQUOTE, comma, semicolon, backslash)
-_COOKIE_OCTETS = (
-    {0x21}
-    | set(range(0x23, 0x2C))
-    | set(range(0x2D, 0x3B))
-    | set(range(0x3C, 0x5C))
-    | set(range(0x5D, 0x7F))
-)
+TOKEN_CHARS = set("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+COOKIE_OCTETS = ({0x21} | set(range(0x23, 0x2C)) | set(range(0x2D, 0x3B)) | set(range(0x3C, 0x5C)) | set(range(0x5D, 0x7F)))
 
 def parse_cookie_header(value: str) -> list[tuple[str, str]]:
-    """Parse a request Cookie header (RFC 6265 §4.2.1) into (name, value) pairs.
-    Surrounding DQUOTEs on a value are removed. Malformed pairs are skipped."""
     pairs: list[tuple[str, str]] = []
     if not value:
         return pairs
@@ -28,11 +17,14 @@ def parse_cookie_header(value: str) -> list[tuple[str, str]]:
         chunk = chunk.strip()
         if not chunk or "=" not in chunk:
             continue
+
         name, _, raw = chunk.partition("=")
         name = name.strip()
         raw = raw.strip()
+
         if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
             raw = raw[1:-1]
+
         if name:
             pairs.append((name, raw))
 
@@ -48,40 +40,44 @@ class Cookie:
     path: str | None = None
     secure: bool = False
     http_only: bool = False
-    same_site: str | None = None  # "Strict", "Lax", or "None"
+    same_site: str | None = None
 
     def serialize(self) -> str:
-        """Serialize as a Set-Cookie field value (RFC 6265 §4.1.1)."""
-        if not self.name or any(ch not in _TOKEN_CHARS for ch in self.name):
+        if not self.name or any(ch not in TOKEN_CHARS for ch in self.name):
             raise ValueError("invalid cookie name")
-        if any(ord(ch) not in _COOKIE_OCTETS for ch in self.value):
+
+        if any(ord(ch) not in COOKIE_OCTETS for ch in self.value):
             raise ValueError("invalid cookie value")
 
         parts = [f"{self.name}={self.value}"]
 
         if self.expires is not None:
             parts.append("Expires=" + format_http_date(self.expires))
+
         if self.max_age is not None:
             parts.append(f"Max-Age={int(self.max_age)}")
+
         if self.domain:
             parts.append(f"Domain={self.domain}")
+
         if self.path:
             parts.append(f"Path={self.path}")
+
         if self.secure:
             parts.append("Secure")
+
         if self.http_only:
             parts.append("HttpOnly")
+
         if self.same_site:
             if self.same_site not in ("Strict", "Lax", "None"):
                 raise ValueError("SameSite must be Strict, Lax, or None")
-            # RFC 6265bis: SameSite=None is only meaningful with Secure.
+
             parts.append(f"SameSite={self.same_site}")
 
         return "; ".join(parts)
 
 def parse_set_cookie(value: str) -> Cookie | None:
-    """Parse a Set-Cookie field value (RFC 6265 §5.2). Returns None if the
-    name-value pair is absent or empty."""
     if not value:
         return None
 

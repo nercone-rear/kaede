@@ -22,7 +22,6 @@ CB_CRYPTO_RELEASE_RCD = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.c_size_t, 
 CB_YIELD_SECRET = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.c_uint32, ctypes.c_int, VOID_P, ctypes.c_size_t, VOID_P)
 CB_GOT_TRANSPORT_PARAMS = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, VOID_P, ctypes.c_size_t, VOID_P)
 CB_ALERT = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.c_ubyte, VOID_P)
-# void (*)(const SSL *ssl, const char *line) — fires for every TLS secret derived
 CB_KEYLOG = ctypes.CFUNCTYPE(None, VOID_P, ctypes.c_char_p)
 
 QuicTLSError = TLSError

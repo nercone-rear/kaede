@@ -25,9 +25,6 @@ TCHAR = frozenset(
 HEXDIG = frozenset(b"0123456789abcdefABCDEF")
 
 def clean_field_value(value_b: bytes) -> str:
-    # RFC 9110 §5.5: strip OWS (SP/HTAB) only, then reject CR/LF/NUL and other
-    # controls. field-vchar = VCHAR / obs-text, so HTAB, SP, %x21-7E and
-    # %x80-FF are permitted; everything else (including NUL) must be rejected.
     value = value_b.strip(b" \t")
     for c in value:
         if c == 0x09 or 0x20 <= c <= 0x7E or c >= 0x80:
@@ -187,7 +184,7 @@ class H1:
         return method.upper() == "HEAD" or 100 <= status_code < 200 or status_code in (204, 205, 304)
 
     @staticmethod
-    def parse_response_head(head: bytes) -> tuple[int, str, Headers]:
+    def parse_response_head(head: bytes) -> tuple[int, str, Headers, bool]:
         lines = head.split(b"\r\n")
         if not lines or not lines[0]:
             raise ValueError("empty HTTP/1.1 status line")
@@ -199,7 +196,7 @@ class H1:
         version_b, status_b = parts[0], parts[1]
         phrase = parts[2].decode("latin-1") if len(parts) > 2 else ""
 
-        if version_b != b"HTTP/1.1":
+        if version_b not in (b"HTTP/1.1", b"HTTP/1.0"):
             raise ValueError(f"unsupported HTTP version: {version_b!r}")
 
         if not (len(status_b) == 3 and status_b.isascii() and status_b.isdigit()):
@@ -228,7 +225,7 @@ class H1:
 
             headers.append(name_b.decode("latin-1"), clean_field_value(value_b))
 
-        return status, phrase, headers
+        return status, phrase, headers, version_b.decode()
 
     @staticmethod
     def parse_response(data: bytes, *, method: str = "GET", max_body_size: int | None = None) -> Response:
@@ -236,7 +233,7 @@ class H1:
         if not sep:
             raise ValueError("incomplete HTTP/1.1 response: missing header terminator")
 
-        status, _, headers = H1.parse_response_head(head)
+        status, _, headers, protocol = H1.parse_response_head(head)
 
         body: bytes | None = None
 
@@ -266,7 +263,7 @@ class H1:
             else:
                 body = bytes(rest) if rest else None
 
-        return Response(body=body, status_code=status, headers=headers, protocol="HTTP/1.1")
+        return Response(body=body, status_code=status, headers=headers, protocol=protocol)
 
     @staticmethod
     def decode_chunked(data: bytes, max_body_size: int | None = None) -> bytes | None:
@@ -286,11 +283,6 @@ class H1:
             if end == -1:
                 return None
 
-            # RFC 9112 §7.1.1: chunk-size = 1*HEXDIG, optionally followed by
-            # chunk-ext (";..."). BWS is permitted only around the ";", so trim
-            # trailing OWS but require the remainder to be strictly hexadecimal;
-            # this rejects smuggling forms like "0x1a", "1_a", "+a" and leading
-            # whitespace that Python's int(_, 16) would otherwise accept.
             size_line = data[i:end].split(b";", 1)[0].rstrip(b" \t")
 
             if not size_line or any(c not in HEXDIG for c in size_line):
@@ -484,14 +476,14 @@ class H1Connection:
                 elif name == b"expect" and value.lower() == b"100-continue":
                     expect_continue = True
 
-            if malformed or len(transfer_encodings) > 1 or len(content_lengths) > 1:
+            if malformed or len(content_lengths) > 1:
                 self.send_error(400, "Bad Request")
                 self.transport.close()
                 return
 
             is_chunked = False
 
-            transfer_encoding_raw = transfer_encodings[0] if transfer_encodings else b""
+            transfer_encoding_raw = b", ".join(transfer_encodings) if transfer_encodings else b""
             content_length_raw = content_lengths[0] if content_lengths else None
 
             if transfer_encoding_raw:
@@ -818,7 +810,7 @@ class H1Connection:
                 del self.buffer[:idx + 4]
 
                 try:
-                    status, _, headers = H1.parse_response_head(head)
+                    status, _, headers, is_http10 = H1.parse_response_head(head)
                 except ValueError as exc:
                     self.fail_request(exc)
                     return
@@ -827,6 +819,11 @@ class H1Connection:
                     continue
 
                 self.headers = headers
+
+                if is_http10:
+                    conn_hdr = (headers.get("Connection") or "").lower()
+                    if "keep-alive" not in conn_hdr:
+                        headers.set("Connection", "close", override=False)
 
                 if H1.response_has_no_body(status, self.method):
                     self.current.set_headers(status, headers)
@@ -903,16 +900,11 @@ class H1Connection:
             line = bytes(self.buffer[:end]).split(b";", 1)[0].rstrip(b" \t")
             del self.buffer[:end + 2]
 
-            try:
-                size = int(line, 16)
-
-            except ValueError:
+            if not line or any(c not in HEXDIG for c in line):
                 self.fail_request(ValueError("invalid chunk size"))
                 return False
 
-            if size < 0:
-                self.fail_request(ValueError("negative chunk size"))
-                return False
+            size = int(line, 16)
 
             if size == 0:
                 self.state = "chunk-trailer"
@@ -983,7 +975,6 @@ class H1Connection:
         elif request.method in ("POST", "PUT", "PATCH", "DELETE"):
             request.headers.set("Content-Length", "0", override=False)
 
-        # RFC 9112 §3.2: HTTP/1.1 requests MUST include a Host header
         if self.authority:
             request.headers.set("Host", self.authority, override=False)
 

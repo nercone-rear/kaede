@@ -133,11 +133,17 @@ class TestPrecedence:
         assert out.status_code == 200
 
 class TestScope:
-    async def test_unsafe_method_not_auto_evaluated(self):
-        # Kaede does not auto-evaluate preconditions for unsafe methods; the
-        # callback's response is returned unchanged in status.
+    async def test_if_match_evaluated_for_unsafe_method(self):
         out = await run(make_request("POST", **{"If-Match": '"other"'}), make_response())
+        assert out.status_code == 412
+
+    async def test_if_match_passes_for_unsafe_method(self):
+        out = await run(make_request("PUT", **{"If-Match": '"v1"'}), make_response())
         assert out.status_code == 200
+
+    async def test_if_none_match_unsafe_method_returns_412(self):
+        out = await run(make_request("DELETE", **{"If-None-Match": '"v1"'}), make_response())
+        assert out.status_code == 412
 
     async def test_ignored_when_response_not_2xx(self):
         out = await run(make_request(**{"If-None-Match": '"v1"'}), make_response(status=404))

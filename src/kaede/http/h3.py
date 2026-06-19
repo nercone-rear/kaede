@@ -159,6 +159,7 @@ class RequestAssembler:
         self.headers: list[tuple[bytes, bytes]] | None = None
         self.body = bytearray()
         self.too_large = False
+        self.headers_done = False
 
 QPACK_MAXtable_CAPACITY = 4096
 
@@ -400,6 +401,9 @@ class H3Connection:
                 if not self.is_client:
                     self.quic.close(0x0105, "H3_FRAME_UNEXPECTED")
                     return
+                else:
+                    self.quic.close(0x010D, "H3_ID_ERROR")
+                    return
 
             elif frame_type in (FRAME_CANCEL_PUSH, FRAME_SETTINGS, FRAME_GOAWAY, FRAME_MAX_PUSH_ID):
                 self.quic.close(0x0105, "H3_FRAME_UNEXPECTED")
@@ -492,7 +496,9 @@ class H3Connection:
                 return
 
             asm = self.assemblers.setdefault(ev.stream_id, RequestAssembler())
-            asm.headers = ev.headers
+            if not asm.headers_done:
+                asm.headers = ev.headers
+                asm.headers_done = True
 
         elif isinstance(ev, DataReceived):
             if ev.stream_id in self.websocket_streams:

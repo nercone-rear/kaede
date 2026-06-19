@@ -23,7 +23,7 @@ def if_match_passes(field_value: str, etag: str) -> bool:
     value = field_value.strip()
 
     if value == "*":
-        return True
+        return bool(etag)
 
     if not etag:
         return False
@@ -34,7 +34,7 @@ def if_none_match_matches(field_value: str, etag: str) -> bool:
     value = field_value.strip()
 
     if value == "*":
-        return True
+        return bool(etag)
 
     if not etag:
         return False
@@ -65,11 +65,10 @@ def precondition_failed(response: Response) -> Response:
     return response
 
 def evaluate_preconditions(request: Request, response: Response) -> Response | None:
-    if request.method not in ("GET", "HEAD"):
-        return None
-
     if response.status_code != 200:
         return None
+
+    is_safe = request.method in ("GET", "HEAD")
 
     etag = (response.headers.get("ETag") or "").strip()
     last_modified_raw = (response.headers.get("Last-Modified") or "").strip()
@@ -91,10 +90,12 @@ def evaluate_preconditions(request: Request, response: Response) -> Response | N
 
     if if_none_match is not None:
         if if_none_match_matches(if_none_match, etag):
-            return not_modified(response)
+            if is_safe:
+                return not_modified(response)
+            return precondition_failed(response)
         return None
 
-    if if_modified_since is not None:
+    if is_safe and if_modified_since is not None:
         when = parse_http_date(if_modified_since)
         if when is not None and last_modified is not None and last_modified <= when:
             return not_modified(response)

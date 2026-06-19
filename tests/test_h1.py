@@ -422,7 +422,7 @@ class TestParseResponse:
             H1.parse_response(b"HTTP/1.1 1000 Too Long\r\n\r\n")
 
     def test_1xx_informational_status_parsed(self):
-        status, _, _ = H1.parse_response_head(b"HTTP/1.1 100 Continue")
+        status, _, _, _ = H1.parse_response_head(b"HTTP/1.1 100 Continue")
         assert status == 100
 
     def test_obs_fold_in_response_rejected(self):
@@ -663,7 +663,7 @@ class TestResponseParsingEdgeCases:
     @pytest.mark.parametrize("code", [200, 301, 400, 500, 600, 700, 999])
     def test_three_digit_status_codes_parseable(self, code):
         """Any 3-digit status code is syntactically valid per RFC 9112"""
-        status, _, _ = H1.parse_response_head(f"HTTP/1.1 {code} Reason".encode())
+        status, _, _, _ = H1.parse_response_head(f"HTTP/1.1 {code} Reason".encode())
         assert status == code
 
     def test_response_with_both_te_and_cl_te_wins(self):
@@ -795,10 +795,16 @@ class TestDecodeChunkedDirect:
 # RFC 9112 §4: parse_response_head edge cases
 
 class TestParseResponseHeadEdgeCases:
-    def test_http10_rejected(self):
-        """RFC 9112 §2.5: HTTP/1.0 is not supported; must raise ValueError."""
-        with pytest.raises(ValueError):
-            H1.parse_response_head(b"HTTP/1.0 200 OK")
+    def test_http10_accepted(self):
+        """RFC 9112 §2.5: clients MUST accept HTTP/1.0 responses from servers."""
+        status, _, _, protocol = H1.parse_response_head(b"HTTP/1.0 200 OK")
+        assert status == 200
+        assert protocol == "HTTP/1.0"
+
+    def test_http11_not_flagged_as_http10(self):
+        """HTTP/1.1 responses must not be flagged as HTTP/1.0."""
+        _, _, _, protocol = H1.parse_response_head(b"HTTP/1.1 200 OK")
+        assert protocol != "HTTP/1.0"
 
     def test_http20_rejected(self):
         """HTTP/2.0 version on an HTTP/1.1 parser must raise ValueError."""
@@ -812,7 +818,7 @@ class TestParseResponseHeadEdgeCases:
 
     def test_empty_reason_phrase_accepted(self):
         """RFC 9112 §4: The reason phrase MAY be empty."""
-        status, phrase, _ = H1.parse_response_head(b"HTTP/1.1 200 ")
+        status, phrase, _, _ = H1.parse_response_head(b"HTTP/1.1 200 ")
         assert status == 200
         assert isinstance(phrase, str)
 
@@ -827,7 +833,7 @@ class TestParseResponseHeadEdgeCases:
             H1.parse_response_head(b"HTTP/1.1 20 OK")
 
     def test_valid_response_parses_headers(self):
-        status, _, headers = H1.parse_response_head(
+        status, _, headers, _ = H1.parse_response_head(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Custom: val"
         )
         assert status == 200

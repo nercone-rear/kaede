@@ -1275,7 +1275,6 @@ class QUICConnection:
         timeout = self.effective_idle_timeout()
         if timeout is None or self.idle_base is None:
             return None
-        # RFC 9000 §10.1: the connection is not timed out earlier than 3 PTOs.
         return self.idle_base + max(timeout, 3 * self.recovery.pto(self.recovery.peer_max_ack_delay))
 
     def get_timer(self) -> float | None:
@@ -1292,7 +1291,6 @@ class QUICConnection:
     def handle_timer(self, now: float):
         idle = self.idle_deadline()
         if idle is not None and now >= idle and not self.terminated:
-            # RFC 9000 §10.1: silently close (no CONNECTION_CLOSE) and discard.
             self.terminated = True
             self._events.append(ConnectionTerminated(0, "idle timeout"))
             return

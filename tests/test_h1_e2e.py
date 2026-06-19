@@ -535,15 +535,11 @@ class TestWebSocketOverH1:
         await writer.drain()
 
         received = []
-        raw = b""
+        buf = bytearray()
         while len(received) < len(messages):
-            raw += await asyncio.wait_for(reader.read(4096), timeout=5.0)
-            frames = parse_frames(bytearray(raw), 4 * 1024 * 1024)
-            for f in frames:
+            buf += await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            for f in parse_frames(buf, 4 * 1024 * 1024):
                 received.append(f.payload)
-            if frames:
-                consumed = sum(f._frame_length for f in frames if hasattr(f, "_frame_length"))
-                raw = raw[consumed:]
 
         assert received[:3] == messages
 
