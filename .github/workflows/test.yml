@@ -1,0 +1,60 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve latest OpenSSL 3.x version
+        id: openssl-version
+        run: |
+          VERSION=$(curl -fsSL "https://api.github.com/repos/openssl/openssl/releases" \
+            | jq -r '[.[] | select(.tag_name | test("^openssl-3\\.")) | .tag_name] | first | ltrimstr("openssl-")')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Cache OpenSSL build
+        id: cache-openssl
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/openssl-3
+          key: openssl-${{ steps.openssl-version.outputs.version }}-${{ runner.os }}
+
+      - name: Build OpenSSL ${{ steps.openssl-version.outputs.version }}
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
+        run: |
+          VERSION="${{ steps.openssl-version.outputs.version }}"
+          sudo apt-get update -q
+          sudo apt-get install -y build-essential
+          curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-${VERSION}/openssl-${VERSION}.tar.gz" \
+            | tar xz
+          cd "openssl-${VERSION}"
+          ./Configure --prefix=/usr/local/openssl-3 --openssldir=/usr/local/openssl-3 shared no-docs
+          make -j$(nproc)
+          sudo make install_sw
+
+      - name: Set KAEDE_LIBSSL
+        run: echo "KAEDE_LIBSSL=/usr/local/openssl-3/lib64/libssl.so.3" >> $GITHUB_ENV
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run tests
+        run: uv run pytest --tb=short -v
