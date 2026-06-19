@@ -27,8 +27,8 @@ jobs:
         id: cache-openssl
         uses: actions/cache@v4
         with:
-          path: ~/openssl-3
-          key: openssl-${{ steps.openssl-version.outputs.version }}-${{ runner.os }}
+          path: ${{ env.HOME }}/openssl-3
+          key: openssl-${{ steps.openssl-version.outputs.version }}-${{ runner.os }}-v2
 
       - name: Build OpenSSL ${{ steps.openssl-version.outputs.version }}
         if: steps.cache-openssl.outputs.cache-hit != 'true'
@@ -39,15 +39,17 @@ jobs:
           curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-${VERSION}/openssl-${VERSION}.tar.gz" \
             | tar xz
           cd "openssl-${VERSION}"
-          ./Configure --prefix="$HOME/openssl-3" --openssldir="$HOME/openssl-3" shared no-docs
+          ./Configure --prefix="$HOME/openssl-3" --openssldir="$HOME/openssl-3" --libdir=lib shared no-docs
           make -j$(nproc)
           make install_sw
 
-      - name: Set KAEDE_LIBSSL
+      - name: Register OpenSSL with ldconfig and set KAEDE_LIBSSL
         run: |
-          LIBSSL=$(find ~/openssl-3 -name "libssl.so.3" | head -1)
+          LIBSSL=$(find "$HOME/openssl-3/lib" -name "libssl.so.3" | head -1)
           echo "Found libssl at: ${LIBSSL}"
-          test -n "${LIBSSL}" || { echo "libssl.so.3 not found under ~/openssl-3"; exit 1; }
+          test -n "${LIBSSL}" || { echo "libssl.so.3 not found under $HOME/openssl-3/lib"; exit 1; }
+          echo "$HOME/openssl-3/lib" | sudo tee /etc/ld.so.conf.d/openssl35.conf
+          sudo ldconfig
           echo "KAEDE_LIBSSL=${LIBSSL}" >> $GITHUB_ENV
 
       - name: Install uv
