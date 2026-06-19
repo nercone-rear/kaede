@@ -118,7 +118,7 @@ class TestEOSSymbol:
 # Huffman table properties
 
 class TestHuffmanTable:
-    def testtable_has_257_entries(self):
+    def test_table_has_257_entries(self):
         """RFC 7541 Appendix B: table covers bytes 0-255 plus EOS (256)"""
         assert len(HUFFMANtable) == 257
 
