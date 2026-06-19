@@ -22,25 +22,43 @@ CB_CRYPTO_RELEASE_RCD = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.c_size_t, 
 CB_YIELD_SECRET = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.c_uint32, ctypes.c_int, VOID_P, ctypes.c_size_t, VOID_P)
 CB_GOT_TRANSPORT_PARAMS = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, VOID_P, ctypes.c_size_t, VOID_P)
 CB_ALERT = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.c_ubyte, VOID_P)
+# void (*)(const SSL *ssl, const char *line) — fires for every TLS secret derived
+CB_KEYLOG = ctypes.CFUNCTYPE(None, VOID_P, ctypes.c_char_p)
 
 QuicTLSError = TLSError
 
 class QuicTLSServerContext:
-    def __init__(self, lib: OpenSSL, ctx: int, keepalive: list, alpn: tuple[str, ...]):
+    def __init__(self, lib: OpenSSL, ctx: int, keepalive: list, alpn: tuple[str, ...], *, enable_0rtt: bool = False):
         self.lib = lib
         self.ctx = ctx
         self.keepalive = keepalive
         self.alpn = alpn
+        self._enable_0rtt = enable_0rtt
 
     @classmethod
-    def for_server(cls, config: TLSServerConfig, *, alpn: tuple[str, ...] = ("h3",)) -> "QuicTLSServerContext":
+    def for_server(cls, config: TLSServerConfig, *, alpn: tuple[str, ...] = ("h3",), enable_0rtt: bool = True) -> "QuicTLSServerContext":
         lib = OpenSSL.get()
         ctx, keepalive = lib.new_context(is_client=False, alpn=alpn, groups=config.groups, ciphers=config.ciphers, min_version=TLS1_3_VERSION, max_version=TLS1_3_VERSION)
         lib.apply_server_config(ctx, config)
-        return cls(lib, ctx, keepalive, alpn)
+        if enable_0rtt:
+            lib.enable_early_data(ctx)
+            # Install keylog callback to capture CLIENT_EARLY_TRAFFIC_SECRET.
+            # OpenSSL 3.x QUIC-TLS external API never yields LEVEL_EARLY READ
+            # via yield_secret on the server side; the keylog callback is the
+            # only hook that exposes this key material.
+            cb = CB_KEYLOG(_server_keylog_cb)
+            keepalive.append(cb)
+            lib.ssl.SSL_CTX_set_keylog_callback(ctx, ctypes.cast(cb, VOID_P))
+        return cls(lib, ctx, keepalive, alpn, enable_0rtt=enable_0rtt)
 
     def connection(self, *, transport_params: bytes = b"") -> "QuicTLS":
-        return QuicTLS(self.ctx, self.lib, is_client=False, transport_params=transport_params, owns_ctx=False)
+        obj = QuicTLS(self.ctx, self.lib, is_client=False, transport_params=transport_params, owns_ctx=False)
+        if self._enable_0rtt:
+            # Signal OpenSSL to derive the client early traffic secret on the
+            # next SSL_do_handshake; this causes yield_secret and the keylog
+            # callback to fire for LEVEL_EARLY READ (RFC 9001 §4).
+            self.lib.enable_quic_early_data(obj.SSL)
+        return obj
 
     def free(self):
         ctx = getattr(self, "ctx", None)
@@ -58,6 +76,10 @@ class QuicTLSServerContext:
             pass
 
 class QuicTLS:
+    # Maps SSL object pointer → QuicTLS instance.  The server keylog callback
+    # uses this to locate the QuicTLS instance from the raw SSL* pointer.
+    _ssl_registry: "dict[int, QuicTLS]" = {}
+
     def __init__(self, ctx_ptr: int, lib: OpenSSL, *, is_client: bool, owns_ctx: bool = True, server_name: str | None = None, verify_hostname: bool = False, transport_params: bytes = b"", keepalive=()):
         self.lib = lib
         self.ctx = ctx_ptr
@@ -89,6 +111,7 @@ class QuicTLS:
             self.ctx = None
             raise TLSError(f"SSL_new failed: {self.lib.errors()}")
 
+        QuicTLS._ssl_registry[self.SSL] = self
         self.install_callbacks()
 
         self.tp_buf = ctypes.create_string_buffer(transport_params, len(transport_params)) if transport_params else None
@@ -240,9 +263,18 @@ class QuicTLS:
                 continue
             break
 
+        # After pumping post-handshake messages, check whether a NewSessionTicket
+        # has been received (client only). Serialize it so callers can save it for
+        # 0-RTT resumption on the next connection.
+        if self.is_client:
+            session_bytes = self.lib.serialize_session(self.SSL)
+            if session_bytes:
+                self._session_bytes = session_bytes
+
     def reset_for_retry(self):
         ssl = self.lib.ssl
         if self.SSL:
+            QuicTLS._ssl_registry.pop(self.SSL, None)
             ssl.SSL_free(self.SSL)
             self.SSL = None
 
@@ -250,6 +282,7 @@ class QuicTLS:
         if not self.SSL:
             raise TLSError("SSL_new failed during Retry reset")
 
+        QuicTLS._ssl_registry[self.SSL] = self
         self.install_callbacks()
 
         if self.tp_buf is not None:
@@ -297,12 +330,17 @@ class QuicTLS:
     def group_name(self) -> str | None:
         return self.lib.group_name(self.SSL)
 
+    def get_session_bytes(self) -> bytes | None:
+        """Return the serialized TLS session (from the most recent NewSessionTicket), or None."""
+        return getattr(self, "_session_bytes", None)
+
     def info(self) -> TLSInfo:
         return self.lib.tls_info(self.SSL)
 
     def free(self):
         ssl_handle = getattr(self, "SSL", None)
         if ssl_handle is not None:
+            QuicTLS._ssl_registry.pop(ssl_handle, None)
             try:
                 self.lib.ssl.SSL_free(ssl_handle)
             except Exception:
@@ -323,15 +361,57 @@ class QuicTLS:
             pass
 
     @classmethod
-    def for_server(cls, config: TLSServerConfig, *, alpn: tuple[str, ...] = ("h3",), transport_params: bytes = b"") -> "QuicTLS":
+    def for_server(cls, config: TLSServerConfig, *, alpn: tuple[str, ...] = ("h3",), transport_params: bytes = b"", enable_0rtt: bool = True) -> "QuicTLS":
         lib = OpenSSL.get()
         ctx, keepalive = lib.new_context(is_client=False, alpn=alpn, groups=config.groups, ciphers=config.ciphers, min_version=TLS1_3_VERSION, max_version=TLS1_3_VERSION)
         lib.apply_server_config(ctx, config)
+        if enable_0rtt:
+            lib.enable_early_data(ctx)
         return cls(ctx, lib, is_client=False, transport_params=transport_params, keepalive=keepalive)
 
     @classmethod
-    def for_client(cls, config: TLSClientConfig, server_name: str, *, alpn: tuple[str, ...] = ("h3",), transport_params: bytes = b"") -> "QuicTLS":
+    def for_client(cls, config: TLSClientConfig, server_name: str, *, alpn: tuple[str, ...] = ("h3",), transport_params: bytes = b"", session_bytes: bytes | None = None) -> "QuicTLS":
         lib = OpenSSL.get()
         ctx, keepalive = lib.new_context(is_client=True, alpn=alpn, groups=config.groups, ciphers=config.ciphers, min_version=TLS1_3_VERSION, max_version=TLS1_3_VERSION)
+        lib.enable_client_sessions(ctx)
         verify_hostname = lib.apply_client_config(ctx, config)
-        return cls(ctx, lib, is_client=True, server_name=server_name, verify_hostname=verify_hostname, transport_params=transport_params, keepalive=keepalive)
+        obj = cls(ctx, lib, is_client=True, server_name=server_name, verify_hostname=verify_hostname, transport_params=transport_params, keepalive=keepalive)
+        if session_bytes:
+            lib.deserialize_and_set_session(obj.SSL, session_bytes)
+            # Request 0-RTT: notify OpenSSL that we want to send early data so
+            # that yield_secret fires for LEVEL_EARLY WRITE on the first
+            # SSL_do_handshake (RFC 9001 §4.6.1).
+            lib.enable_quic_early_data(obj.SSL)
+        return obj
+
+
+def _server_keylog_cb(ssl_ptr: int, line: bytes) -> None:
+    """OpenSSL keylog callback for server-side QUIC 0-RTT key capture.
+
+    OpenSSL fires this during SSL_do_handshake when it derives each TLS
+    secret.  For a resumed TLS 1.3 session the line
+    ``CLIENT_EARLY_TRAFFIC_SECRET <client_random_hex> <secret_hex>``
+    carries the client_early_traffic_secret — identical to what yield_secret
+    would yield as (LEVEL_EARLY, DIRECTION_READ) if OpenSSL exposed it.
+
+    This is the only way to obtain the server-side 0-RTT read key from the
+    OpenSSL 3.x external QUIC-TLS API.
+    """
+    if not line or ssl_ptr is None:
+        return
+    try:
+        line_str = line.decode("ascii", "replace")
+    except Exception:
+        return
+    if not line_str.startswith("CLIENT_EARLY_TRAFFIC_SECRET "):
+        return
+    parts = line_str.split()
+    if len(parts) != 3:
+        return
+    try:
+        secret = bytes.fromhex(parts[2])
+    except ValueError:
+        return
+    quic_tls = QuicTLS._ssl_registry.get(ssl_ptr)
+    if quic_tls is not None:
+        quic_tls.secrets[(LEVEL_EARLY, DIRECTION_READ)] = secret

@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 import hmac
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import frame as frames
 from . import packet
 from .packet import Buffer, encode_uint_var
-from .crypto import PacketKeys, suite_for, initial_keys, verify_retry_integrity_tag, LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION, INITIAL_CIPHER
+from .crypto import PacketKeys, suite_for, initial_keys, verify_retry_integrity_tag, LEVEL_INITIAL, LEVEL_EARLY, LEVEL_HANDSHAKE, LEVEL_APPLICATION, INITIAL_CIPHER
 from .stream import Stream, StreamSender, StreamReceiver, stream_is_bidirectional, stream_is_client_initiated
 from .recovery import Recovery, SentPacket, Space, level_to_space, SPACE_INITIAL, SPACE_HANDSHAKE, SPACE_APPLICATION
 from .tls import QuicTLS
@@ -85,6 +85,16 @@ class ConnectionTerminated:
 @dataclass
 class DatagramReceived:
     data: bytes
+
+@dataclass
+class QuicSession:
+    """Saved session state that enables 0-RTT resumption on the next connection.
+
+    Pass an instance of this to *QUICConnection.create_client* (via the *session*
+    parameter) to attempt 0-RTT on the resumed connection.
+    """
+    tls_session: bytes          # serialized SSL_SESSION (DER)
+    peer_transport_params: bytes  # serialized server transport parameters
 
 def encode_transport_parameters(params: dict[int, int | bytes]) -> bytes:
     buf = bytearray()
@@ -170,7 +180,7 @@ class QUICConnection:
             self.send_keys[LEVEL_INITIAL], self.recv_keys[LEVEL_INITIAL] = sk, ck
 
         self.crypto_send = {LEVEL_INITIAL: StreamSender(), LEVEL_HANDSHAKE: StreamSender(), LEVEL_APPLICATION: StreamSender()}
-        self.crypto_recv = {LEVEL_INITIAL: StreamReceiver(), LEVEL_HANDSHAKE: StreamReceiver(), LEVEL_APPLICATION: StreamReceiver()}
+        self.crypto_recv = {LEVEL_INITIAL: StreamReceiver(), LEVEL_EARLY: StreamReceiver(), LEVEL_HANDSHAKE: StreamReceiver(), LEVEL_APPLICATION: StreamReceiver()}
 
         self.next_pn = {SPACE_INITIAL: 0, SPACE_HANDSHAKE: 0, SPACE_APPLICATION: 0}
         self.recv_pns: dict[int, set[int]] = {SPACE_INITIAL: set(), SPACE_HANDSHAKE: set(), SPACE_APPLICATION: set()}
@@ -236,7 +246,7 @@ class QUICConnection:
         self._tls_factory = None
 
     @classmethod
-    def create_client(cls, tls_factory, server_name: str, local_tp_extra: dict | None = None) -> "QUICConnection":
+    def create_client(cls, tls_factory, server_name: str, local_tp_extra: dict | None = None, *, session: "QuicSession | None" = None) -> "QUICConnection":
         local_cid = os.urandom(8)
         original_dcid = os.urandom(8)
         tp = {
@@ -260,6 +270,18 @@ class QUICConnection:
 
         conn = cls(is_client=True, tls=tls, original_dcid=original_dcid, local_cid=local_cid, remote_cid=original_dcid)
         conn._tls_factory = tls_factory
+
+        # Pre-populate peer transport parameters from the saved session so the
+        # client can send 0-RTT data immediately without waiting for the server's
+        # transport parameters to arrive (RFC 9001 §4.6.1).
+        if session and session.peer_transport_params:
+            saved_tp = decode_transport_parameters(session.peer_transport_params)
+            conn.peer_transport_params = saved_tp
+            conn.peer_max_data = int(saved_tp.get(TP_INITIAL_MAX_DATA, DEFAULT_MAX_DATA) or 0)
+            conn.peer_max_datagram_frame_size = int(saved_tp.get(TP_MAX_DATAGRAM_FRAME_SIZE, 0) or 0)
+            conn.max_bidi_streams = int(saved_tp.get(TP_INITIAL_MAX_STREAMS_BIDI, DEFAULT_MAX_STREAMS) or DEFAULT_MAX_STREAMS)
+            conn.max_uni_streams = int(saved_tp.get(TP_INITIAL_MAX_STREAMS_UNI, DEFAULT_MAX_STREAMS) or DEFAULT_MAX_STREAMS)
+
         return conn
 
     @staticmethod
@@ -393,7 +415,39 @@ class QUICConnection:
         self._events = []
         return out
 
+    def get_session(self) -> "QuicSession | None":
+        """Return a *QuicSession* that can be used for 0-RTT on the next connection.
+
+        Only available on the client side after a successful handshake.  Returns
+        *None* if no session ticket has been received yet.
+        """
+        if not self.is_client:
+            return None
+        session_bytes = self.tls.get_session_bytes()
+        if not session_bytes:
+            return None
+        return QuicSession(
+            tls_session=session_bytes,
+            peer_transport_params=self.tls.peer_transport_params,
+        )
+
     def install_handshake_keys(self):
+        # 0-RTT: install LEVEL_EARLY keys independently (only one direction per
+        # endpoint: client gets write, server gets read).  Skip once APPLICATION
+        # keys are available — the 0-RTT phase is over and should not be revived
+        # even though tls.secrets still holds the EARLY secret.
+        if LEVEL_APPLICATION not in self.send_keys:
+            for direction, keys_dict, secret_fn in (
+                ("write", self.send_keys, self.tls.write_secret),
+                ("read",  self.recv_keys, self.tls.read_secret),
+            ):
+                if LEVEL_EARLY not in keys_dict:
+                    secret = secret_fn(LEVEL_EARLY)
+                    if secret:
+                        name = self.tls.cipher_name() or INITIAL_CIPHER
+                        suite = suite_for(name)
+                        keys_dict[LEVEL_EARLY] = PacketKeys(secret, suite)
+
         for level in (LEVEL_HANDSHAKE, LEVEL_APPLICATION):
             if level not in self.send_keys:
                 ws = self.tls.write_secret(level)
@@ -410,6 +464,11 @@ class QUICConnection:
                         # key update can be processed immediately (RFC 9001 §6).
                         self.send_keys_next = self.send_keys[level].next_generation()
                         self.recv_keys_next = self.recv_keys[level].next_generation()
+                        # 0-RTT is over once 1-RTT keys are available (RFC 9001 §4.9.3).
+                        # Both directions are discarded: the client stops sending
+                        # 0-RTT, and the server stops accepting it.
+                        self.send_keys.pop(LEVEL_EARLY, None)
+                        self.recv_keys.pop(LEVEL_EARLY, None)
 
     def run_handshake(self):
         if self.terminated:
@@ -494,6 +553,9 @@ class QUICConnection:
 
             offset += consumed
             self.run_handshake()
+            # Retry buffered packets (e.g. 0-RTT) that may now be decryptable
+            # after keys were just installed by run_handshake().
+            self.drain_buffered(now)
 
     def drain_buffered(self, now: float):
         buffered = self.buffered_packets
@@ -713,6 +775,12 @@ class QUICConnection:
 
             if ftype is not frames.Padding and ftype is not frames.Ack and ftype is not frames.ConnectionClose:
                 ack_eliciting = True
+
+            # RFC 9000 §12.5: ACK, CRYPTO, HandshakeDone, and CONNECTION_CLOSE
+            # frames must not appear in 0-RTT packets.
+            if level == LEVEL_EARLY and ftype in (frames.Ack, frames.Crypto, frames.HandshakeDone, frames.ConnectionClose):
+                self.close(0x0a, "PROTOCOL_VIOLATION: frame type not allowed in 0-RTT", application=False)
+                return
 
             if ftype is frames.Crypto:
                 recv = self.crypto_recv[level]
@@ -1033,7 +1101,7 @@ class QUICConnection:
         needs_expansion = False
         progressed = False
 
-        for level in (LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION):
+        for level in (LEVEL_INITIAL, LEVEL_EARLY, LEVEL_HANDSHAKE, LEVEL_APPLICATION):
             if level not in self.send_keys:
                 continue
 
@@ -1067,7 +1135,8 @@ class QUICConnection:
         sent_frames: list = []
         ack_eliciting = False
 
-        if self.ack_needed[space] and self.recv_pns[space]:
+        # ACK frames are not allowed in 0-RTT packets (RFC 9000 §12.5).
+        if level != LEVEL_EARLY and self.ack_needed[space] and self.recv_pns[space]:
             ranges = frames.ranges_from_set(self.recv_pns[space])
 
             # ACK Delay is the time since the largest acked packet arrived,
@@ -1081,7 +1150,8 @@ class QUICConnection:
             payload += ack.encode()
             self.ack_needed[space] = False
 
-        if self.close_pending is not None:
+        # CONNECTION_CLOSE is not allowed in 0-RTT packets (RFC 9000 §12.5).
+        if self.close_pending is not None and level != LEVEL_EARLY:
             close_frame = self.close_pending
 
             if level != LEVEL_APPLICATION and close_frame.application:
@@ -1092,29 +1162,34 @@ class QUICConnection:
             self.close_sent = True
 
         budget = max_len - len(payload) - 64
-        crypto = self.crypto_send[level]
-        while budget > 16 and crypto.has_data_to_send(1 << 62):
-            frame = crypto.get_frame(min(budget, 1100), 1 << 62)
-            if frame is None:
-                break
-            off, cdata, _ = frame
-            if not cdata:
-                break
-            payload += frames.Crypto(off, cdata).encode()
-            sent_frames.append(("crypto", level, off, len(cdata)))
-            ack_eliciting = True
-            budget = max_len - len(payload) - 64
-
-        if level == LEVEL_APPLICATION and self.close_pending is None:
-            if self.path_response_pending is not None:
-                payload += frames.PathResponse(self.path_response_pending).encode()
-                self.path_response_pending = None
+        # LEVEL_EARLY has no CRYPTO data; crypto_send does not hold a key for it.
+        crypto = self.crypto_send.get(level)
+        if crypto is not None:
+            while budget > 16 and crypto.has_data_to_send(1 << 62):
+                frame = crypto.get_frame(min(budget, 1100), 1 << 62)
+                if frame is None:
+                    break
+                off, cdata, _ = frame
+                if not cdata:
+                    break
+                payload += frames.Crypto(off, cdata).encode()
+                sent_frames.append(("crypto", level, off, len(cdata)))
                 ack_eliciting = True
+                budget = max_len - len(payload) - 64
 
-            if self.handshake_done_pending:
-                payload += frames.HandshakeDone().encode()
-                self.handshake_done_pending = False
-                ack_eliciting = True
+        # Stream data and flow-control frames are permitted in both 0-RTT
+        # (LEVEL_EARLY) and 1-RTT (LEVEL_APPLICATION) packets.
+        if level in (LEVEL_EARLY, LEVEL_APPLICATION) and self.close_pending is None:
+            if level == LEVEL_APPLICATION:
+                if self.path_response_pending is not None:
+                    payload += frames.PathResponse(self.path_response_pending).encode()
+                    self.path_response_pending = None
+                    ack_eliciting = True
+
+                if self.handshake_done_pending:
+                    payload += frames.HandshakeDone().encode()
+                    self.handshake_done_pending = False
+                    ack_eliciting = True
 
             if self.streams_blocked_bidi and max_len - len(payload) > 16:
                 payload += frames.StreamsBlocked(self.max_bidi_streams or 0, bidi=True).encode()
@@ -1233,7 +1308,11 @@ class QUICConnection:
         if level == LEVEL_APPLICATION:
             prefix, first = packet.serialize_short_header_prefix(self.remote_cid, pn_len, key_phase=bool(self.send_key_gen & 1))
         else:
-            ptype = {LEVEL_INITIAL: packet.PACKET_TYPE_INITIAL, LEVEL_HANDSHAKE: packet.PACKET_TYPE_HANDSHAKE}[level]
+            ptype = {
+                LEVEL_INITIAL: packet.PACKET_TYPE_INITIAL,
+                LEVEL_EARLY: packet.PACKET_TYPE_0RTT,
+                LEVEL_HANDSHAKE: packet.PACKET_TYPE_HANDSHAKE,
+            }[level]
             token = self.retry_token if level == LEVEL_INITIAL else b""
             prefix, first = packet.serialize_long_header_prefix(ptype, packet.QUIC_VERSION_1, self.remote_cid, self.local_cid, token, pn_len, payload_len)
 
