@@ -20,9 +20,8 @@ jobs:
       - name: Resolve latest OpenSSL 3.x version
         id: openssl-version
         run: |
-          VERSION=$(gh api repos/openssl/openssl/releases --paginate \
-            -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-3\\.")) | .tag_name] | first | ltrimstr("openssl-")')
-          echo "Resolved OpenSSL version: ${VERSION}"
+          VERSION=$(gh api repos/openssl/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-3\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
+          echo "Resolved OpenSSL ${VERSION}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v3" >> $GITHUB_OUTPUT
 
