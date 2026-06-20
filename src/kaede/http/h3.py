@@ -29,9 +29,9 @@ FRAME_MAX_PUSH_ID = 0xD
 STREAM_CONTROL = 0x00
 STREAM_PUSH = 0x01
 STREAM_QPACK_ENCODER = 0x02
-STREAMqpack_decoder = 0x03
+STREAM_QPACK_DECODER = 0x03
 
-SETTINGS_QPACK_MAXtable_CAPACITY = 0x01
+SETTINGS_QPACK_MAX_TABLE_CAPACITY = 0x01
 SETTINGS_MAX_FIELD_SECTION_SIZE = 0x06
 SETTINGS_QPACK_BLOCKED_STREAMS = 0x07
 SETTINGS_ENABLE_CONNECT_PROTOCOL = 0x08
@@ -89,7 +89,7 @@ class H3:
         body = bytearray()
 
         for ident, value in (
-            (SETTINGS_QPACK_MAXtable_CAPACITY, qpack_maxtable_capacity),
+            (SETTINGS_QPACK_MAX_TABLE_CAPACITY, qpack_maxtable_capacity),
             (SETTINGS_QPACK_BLOCKED_STREAMS, 0),
             (SETTINGS_ENABLE_CONNECT_PROTOCOL, 1),
             (0x21, 0)
@@ -163,7 +163,7 @@ class RequestAssembler:
         self.headers_done = False
         self.trailers: list[tuple[bytes, bytes]] | None = None
 
-QPACK_MAXtable_CAPACITY = 4096
+QPACK_MAX_TABLE_CAPACITY = 4096
 
 class H3Connection:
     def __init__(self, quic: QUICConnection, protocol, is_client: bool = False, *, addr=None, authority: str = ""):
@@ -179,7 +179,7 @@ class H3Connection:
         # H3 framing state
         self.control_stream_id: int | None = None
         self.qpack_dec_stream_id: int | None = None
-        self.qpack_decoder: qpack.QpackDecoder = qpack.QpackDecoder(QPACK_MAXtable_CAPACITY)
+        self.qpack_decoder: qpack.QpackDecoder = qpack.QpackDecoder(QPACK_MAX_TABLE_CAPACITY)
         self.peer_uni_types: dict[int, int] = {}
         self.uni_buffers: dict[int, bytearray] = {}
         self.request_buffers: dict[int, bytearray] = {}
@@ -235,13 +235,13 @@ class H3Connection:
 
     def setup(self):
         self.control_stream_id = self.quic.get_next_available_stream_id(is_bidi=False)
-        self.quic.send_stream_data(self.control_stream_id, encode_uint_var(STREAM_CONTROL) + H3.encode_settings(QPACK_MAXtable_CAPACITY), end_stream=False)
+        self.quic.send_stream_data(self.control_stream_id, encode_uint_var(STREAM_CONTROL) + H3.encode_settings(QPACK_MAX_TABLE_CAPACITY), end_stream=False)
 
         enc = self.quic.get_next_available_stream_id(is_bidi=False)
         self.quic.send_stream_data(enc, encode_uint_var(STREAM_QPACK_ENCODER), end_stream=False)
 
         dec = self.quic.get_next_available_stream_id(is_bidi=False)
-        self.quic.send_stream_data(dec, encode_uint_var(STREAMqpack_decoder), end_stream=False)
+        self.quic.send_stream_data(dec, encode_uint_var(STREAM_QPACK_DECODER), end_stream=False)
         self.qpack_dec_stream_id = dec
 
     def open_request_stream(self) -> int:
@@ -368,7 +368,7 @@ class H3Connection:
 
         stream_type = self.peer_uni_types.get(sid)
 
-        if end_stream and stream_type in (STREAM_CONTROL, STREAM_QPACK_ENCODER, STREAMqpack_decoder):
+        if end_stream and stream_type in (STREAM_CONTROL, STREAM_QPACK_ENCODER, STREAM_QPACK_DECODER):
             self.quic.close(0x0104, "H3_CLOSED_CRITICAL_STREAM")
             return
 
