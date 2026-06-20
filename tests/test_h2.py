@@ -399,7 +399,7 @@ class TestH2ReceiveValidRequests:
         assert isinstance(requests[0].h2.connection_id, bytes)
         assert len(requests[0].h2.connection_id) == 8
 
-    def testCLIENT_ADDRess_stored(self):
+    def test_client_addr_stored(self):
         """The client address passed to receive() must appear on the Request."""
         server, client = make_h2_pair()
         sid = client.get_next_available_stream_id()

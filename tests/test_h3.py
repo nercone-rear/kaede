@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 from kaede.http.models import Request, Response, Headers
-from kaede.http.h3 import H3, H3_FORBIDDEN_HEADERS, FRAME_DATA, FRAME_HEADERS, FRAME_SETTINGS, FRAME_GOAWAY, SETTINGS_QPACK_MAXtable_CAPACITY, SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_ENABLE_CONNECT_PROTOCOL, FORBIDDEN_H2_SETTINGS, STREAM_CONTROL, STREAM_QPACK_ENCODER, STREAMqpack_decoder
+from kaede.http.h3 import H3, H3_FORBIDDEN_HEADERS, FRAME_DATA, FRAME_HEADERS, FRAME_SETTINGS, FRAME_GOAWAY, SETTINGS_QPACK_MAX_TABLE_CAPACITY, SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_ENABLE_CONNECT_PROTOCOL, FORBIDDEN_H2_SETTINGS, STREAM_CONTROL, STREAM_QPACK_ENCODER, STREAM_QPACK_DECODER
 from kaede.quic.packet import Buffer, encode_uint_var
 
 # RFC 9000 §16: QUIC Variable-Length Integer Encoding
@@ -111,7 +111,7 @@ class TestH3Settings:
             )
 
     def test_qpack_maxtable_capacity_zero(self):
-        """RFC 9204 §5: SETTINGS_QPACK_MAXtable_CAPACITY=0 means no dynamic table"""
+        """RFC 9204 §5: SETTINGS_QPACK_MAX_TABLE_CAPACITY=0 means no dynamic table"""
         settings_frame = H3.encode_settings()
         buf = Buffer(settings_frame)
         buf.pull_uint_var()
@@ -125,7 +125,7 @@ class TestH3Settings:
             value = pbuf.pull_uint_var()
             settings[ident] = value
 
-        assert settings.get(SETTINGS_QPACK_MAXtable_CAPACITY, 0) == 0
+        assert settings.get(SETTINGS_QPACK_MAX_TABLE_CAPACITY, 0) == 0
 
     def test_qpack_blocked_streams_zero(self):
         settings_frame = H3.encode_settings()
@@ -517,7 +517,7 @@ class TestH3ControlStreamFIN:
                 self.blocked_header_streams = set()
 
         h3 = FakeH3()
-        h3.feed_uni_stream(3, encode_uint_var(STREAMqpack_decoder), end_stream=True, out=[])
+        h3.feed_uni_stream(3, encode_uint_var(STREAM_QPACK_DECODER), end_stream=True, out=[])
         assert quic._close_code == 0x0104
 
 

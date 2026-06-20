@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 from kaede.http.qpack import QpackError, QpackBlocked, QpackDecoder, encode_integer, decode_integer, encode_string, decode_string, encode_headers, decode_headers, STATIC_INDEX_BY_HEADER, STATIC_INDEX_BY_NAME
-from kaede.http.qpack import STATIC_TABLE as STATICtable
+from kaede.http.qpack import STATIC_TABLE
 
 # RFC 7541 §5.1 / RFC 9204 §4.1.1: Integer Representation
 
@@ -92,27 +92,27 @@ class TestStringEncoding:
 
 class TestStaticTable:
     def test_non_empty(self):
-        assert len(STATICtable) > 0
+        assert len(STATIC_TABLE) > 0
 
     def test_first_entry_is_authority(self):
         """RFC 9204 Appendix A: index 0 is (:authority, "")"""
-        assert STATICtable[0] == (b":authority", b"")
+        assert STATIC_TABLE[0] == (b":authority", b"")
 
     def test_second_entry_is_path(self):
-        assert STATICtable[1] == (b":path", b"/")
+        assert STATIC_TABLE[1] == (b":path", b"/")
 
     def test_all_names_are_bytes(self):
-        for name, value in STATICtable:
+        for name, value in STATIC_TABLE:
             assert isinstance(name, bytes)
             assert isinstance(value, bytes)
 
     def test_all_names_are_lowercase(self):
         """RFC 9113 §8.2: header names MUST be lowercase in HTTP/2/3"""
-        for name, value in STATICtable:
+        for name, value in STATIC_TABLE:
             assert name == name.lower(), f"Non-lowercase name in static table: {name!r}"
 
     def test_pseudo_headers_start_with_colon(self):
-        pseudos = [n for n, v in STATICtable if n.startswith(b":")]
+        pseudos = [n for n, v in STATIC_TABLE if n.startswith(b":")]
         assert len(pseudos) > 0
 
     def test_index_by_header_populated(self):
