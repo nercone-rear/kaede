@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Optional, Literal
 from dataclasses import dataclass, field
 
 class TLSGroup(Enum):
@@ -263,14 +263,14 @@ CIPHER_MAP: dict[str, TLSCipher] = {c.value: c for c in TLSCipher}
 
 @dataclass
 class TLSClientConfig:
-    cafile: str | None = None
-    capath: str | None = None
+    cafile: Optional[str] = None
+    capath: Optional[str] = None
 
     verify_mode: TLSVerifyMode = TLSVerifyMode.REQUIRED
     minimum_version: Literal["TLSv1.0", "TLSv1.1", "TLSv1.2", "TLSv1.3"] = "TLSv1.2"
 
-    certfile: str | None = None
-    keyfile: str | None = None
+    certfile: Optional[str] = None
+    keyfile: Optional[str] = None
 
     ciphers: list[TLSCipher] = field(default_factory=lambda: [
         # TLS 1.3
@@ -302,9 +302,9 @@ class TLSClientConfig:
 
 @dataclass
 class TLSServerConfig:
-    certfile: str | None = None
-    keyfile: str | None = None
-    cafile: str | None = None
+    certfile: Optional[str] = None
+    keyfile: Optional[str] = None
+    cafile: Optional[str] = None
 
     verify_mode: TLSVerifyMode = TLSVerifyMode.REQUIRED
     minimum_version: Literal["TLSv1.0", "TLSv1.1", "TLSv1.2", "TLSv1.3"] = "TLSv1.2"

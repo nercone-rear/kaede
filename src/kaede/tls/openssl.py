@@ -3,13 +3,14 @@ import sys
 import glob
 import ctypes
 import ctypes.util
+from typing import Optional
 
 VOID_P = ctypes.c_void_p
 
 class OpenSSL:
     def __init__(self):
-        self.ssl: ctypes.CDLL | None = None
-        self.crypto: ctypes.CDLL | None = None
+        self.ssl: Optional[ctypes.CDLL] = None
+        self.crypto: Optional[ctypes.CDLL] = None
 
         for path in OpenSSL.candidate_lib_paths("ssl"):
             try:

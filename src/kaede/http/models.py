@@ -10,7 +10,7 @@ import brotlicffi
 import minify_html
 from enum import Enum
 from scour import scour
-from typing import Any, Optional, Literal, TypeVar, TypeAlias
+from typing import Any, Optional, Literal, Union, TypeVar, TypeAlias
 from importlib.metadata import version
 from dataclasses import dataclass, field
 from collections.abc import AsyncIterator
@@ -27,7 +27,7 @@ class HTTPHeaderCase(Enum):
     LOWERCASE = "lower-case" # for HTTP/2/3
 
 class HTTPHeaders:
-    def __init__(self, value: str | bytes | list[tuple[str, list[str]]], case: Optional[HTTPHeaderCase] = None):
+    def __init__(self, value: Union[str, bytes, list[tuple[str, list[str]]]], case: Optional[HTTPHeaderCase] = None):
         self.case = case
         if isinstance(value, (str, bytes)):
             self.raw = HTTPHeaders.parse(value).raw
@@ -37,7 +37,7 @@ class HTTPHeaders:
     def __getitem__(self, key: str) -> Optional[list[str]]:
         ...
 
-    def __setitem__(self, key: str, value: str | list[str]):
+    def __setitem__(self, key: str, value: Union[str, list[str]]):
         ...
 
     def __contains__(self, item: str):
@@ -46,10 +46,10 @@ class HTTPHeaders:
     def items(self) -> list[tuple[str, str]]:
         ...
 
-    def get(self, key: str, default: Optional[T] = None) -> Optional[str | T]:
+    def get(self, key: str, default: Optional[T] = None) -> Optional[Union[str, T]]:
         ...
 
-    def set(self, key: str, value: str | list[str], override: bool = True):
+    def set(self, key: str, value: Union[str, list[str]], override: bool = True):
         ...
 
     def append(self, key: str, value: str):
@@ -59,7 +59,7 @@ class HTTPHeaders:
         ...
 
     @classmethod
-    def parse(cls, value: str | bytes) -> "HTTPHeaders":
+    def parse(cls, value: Union[str, bytes]) -> "HTTPHeaders":
         ...
 
     def build(self) -> str:
@@ -67,14 +67,14 @@ class HTTPHeaders:
 
 @dataclass
 class HTTPMessage:
-    client: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
+    client: tuple[Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
 
     protocol: Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"] = "HTTP/1.1"
 
     headers: HTTPHeaders = field(default_factory=lambda: HTTPHeaders({}))
     trailers: Optional[HTTPHeaders] = None
 
-    body: Optional[bytes | AsyncIterator[bytes] | os.PathLike] = None
+    body: Optional[Union[bytes, AsyncIterator[bytes], os.PathLike]] = None
 
     scheme: Literal["http", "https"] = "http"
     secure: bool = False
@@ -84,8 +84,8 @@ class HTTPMessage:
     compression: bool = True
     minification: bool = False
 
-    compressed: Optional[bytes | AsyncIterator[bytes]] = None
-    minified: Optional[bytes | AsyncIterator[bytes]] = None
+    compressed: Optional[Union[bytes, AsyncIterator[bytes]]] = None
+    minified: Optional[Union[bytes, AsyncIterator[bytes]]] = None
 
     @property
     def text(self) -> str:

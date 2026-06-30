@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Optional
+from typing import Optional, Union
 from pathlib import Path
 
 from .models import HTTPResponse, HTTPHeaders
@@ -28,7 +28,7 @@ class HTMLResponse(HTTPResponse):
         self.headers.set("Content-Type", "text/html")
 
 class JSONResponse(HTTPResponse):
-    def __init__(self, content: list | dict, *, status_code: int = 200, headers: Optional[HTTPHeaders] = None, compression: bool = True, range: Optional[tuple[int, int]] = None):
+    def __init__(self, content: Union[list, dict], *, status_code: int = 200, headers: Optional[HTTPHeaders] = None, compression: bool = True, range: Optional[tuple[int, int]] = None):
         self.body = json.dumps(content).encode()
         self.status_code = status_code
         self.headers = headers or HTTPHeaders({})
@@ -39,7 +39,7 @@ class JSONResponse(HTTPResponse):
         self.headers.set("Content-Type", "application/json")
 
 class FileResponse(HTTPResponse):
-    def __init__(self, path: os.PathLike | Path, *, status_code: int = 200, headers: Optional[HTTPHeaders] = None, content_type: Optional[str] = None, compression: bool = True, minification: bool = False, range: Optional[tuple[int, int]] = None):
+    def __init__(self, path: Union[os.PathLike, Path], *, status_code: int = 200, headers: Optional[HTTPHeaders] = None, content_type: Optional[str] = None, compression: bool = True, minification: bool = False, range: Optional[tuple[int, int]] = None):
         self.body = str(path) if isinstance(path, Path) else path
         self.status_code = status_code
         self.headers = headers or HTTPHeaders({})

@@ -2,7 +2,7 @@ import struct
 import random
 import asyncio
 from enum import Enum, IntFlag
-from typing import Optional, Final, Annotated, Callable
+from typing import Optional, Union, Final, Annotated, Callable
 from pydantic import Field
 from dataclasses import dataclass
 
@@ -104,7 +104,7 @@ class TCPSegment:
         result = (~checksum) & 0xFFFF
         return result
 
-    def build(self, src_addr: str | bytes, dst_addr: str | bytes) -> bytes:
+    def build(self, src_addr: Union[str, bytes], dst_addr: Union[str, bytes]) -> bytes:
         padded_options = self.options
         while len(padded_options) % 4 != 0:
             padded_options += b"\x00"
@@ -147,7 +147,7 @@ class TCPSegment:
         )
 
     @classmethod
-    def parse(cls, data: bytes, src_addr: str | bytes, dst_addr: str | bytes, validate_checksum: bool = True) -> "TCPSegment":
+    def parse(cls, data: bytes, src_addr: Union[str, bytes], dst_addr: Union[str, bytes], validate_checksum: bool = True) -> "TCPSegment":
         if len(data) < TCP_HEADER_LEN:
             raise ValueError("TCP segment too short")
 

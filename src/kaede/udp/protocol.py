@@ -36,7 +36,7 @@ class UDPSegment:
 
         return (~s) & 0xFFFF
 
-    def build(self, src_addr: str | bytes, dst_addr: str | bytes) -> bytes:
+    def build(self, src_addr: Union[str, bytes], dst_addr: Union[str, bytes]) -> bytes:
         data_len = UDP_HEADER_LEN + len(self.payload)
         if data_len > 0xFFFF:
             raise ValueError("UDP length exceeds 65535")
