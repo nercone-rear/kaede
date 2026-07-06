@@ -50,7 +50,7 @@ class OpenSSL:
                 if name in basename:
                     paths.append(env)
 
-        if sys.platform == "darwin":
+        if sys.platform.startswith("darwin"):
             patterns = [
                 # OpenSSL 4.x
                 f"/opt/homebrew/opt/openssl@4*/lib/lib{name}.dylib",
@@ -64,7 +64,7 @@ class OpenSSL:
             ]
             for pattern in patterns:
                 paths.extend(sorted(glob.glob(pattern), reverse=True))
-        else:
+        elif sys.platform.startswith(("linux", "cygwin")):
             patterns = [
                 # OpenSSL 4.x
                 f"/usr/lib/*/lib{name}.so.4",

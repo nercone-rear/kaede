@@ -4,6 +4,8 @@ This file provides information that Claude Code needs to know when handling the 
 ## Overview
 Kaede is a Python library for processing commonly used protocols. (e.g. TCP, UDP, QUIC, TLS, HTTP)
 
+Please read README.md for details.
+
 ## Automated Testing
 pytest is used for automated testing. While minimal tests can be covered by automated tests, they are not perfect, so prioritize manual testing as much as possible.
 

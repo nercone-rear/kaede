@@ -1,3 +1,3 @@
-from .models import TLSGroup, TLSCipher, TLSVersion, TLSVerifyMode, TLSClientConfig, TLSServerConfig
+from .models import TLSVersion, TLSVerifyMode, TLSGroup, TLSCipher, TLSConfig
 
-__all__ = ["TLSGroup", "TLSCipher", "TLSVersion", "TLSVerifyMode", "TLSClientConfig", "TLSServerConfig"]
+__all__ = ["TLSVersion", "TLSVerifyMode", "TLSGroup", "TLSCipher", "TLSConfig"]

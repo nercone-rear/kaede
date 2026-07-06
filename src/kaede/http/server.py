@@ -1,47 +1,26 @@
-from enum import Enum
-from typing import Optional, Union, Literal
+from typing import Optional, Literal, Union, Callable
 from dataclasses import dataclass, field
 
-from ..uds import UDS
-from ..tcp import TCPPort
-from ..udp import UDPPort
-from ..tls import TLSServerConfig
-from .models import HTTPVersion
+from ..tls import TLSConfig
+from .models import HTTPVersion, HTTPRole, HTTPPort
 
-class HTTPServerRole(Enum):
-    ORIGIN = "Origin"
-    PROXY = "Proxy"
-    GATEWAY = "Gateway"
-    TUNNEL = "Tunnel"
-
-@dataclass
-class HTTPServerPort:
-    type: Literal["uds", "tcp", "quic"] = "tcp"
-    port: Union[UDS, TCPPort, UDPPort] = TCPPort(80)
-    secure: bool = False
-
-    @property
-    def vaild(self) -> bool:
-        if self.type == "uds":
-            return isinstance(self.port, UDS)
-        elif self.type == "tcp":
-            return isinstance(self.port, TCPPort)
-        elif self.type == "quic":
-            return isinstance(self.port, UDPPort) and self.secure
+class Handler:
+    def __init__(self, on_request: Optional[Callable] = None, on_websocket: Optional[Callable] = None):
+        self.on_request = on_request      # (request: Request) -> Response
+        self.on_websocket = on_websocket  # (websocket: WSConnection) -> None
 
 @dataclass
 class HTTPServerConfig:
-    versions: list[HTTPVersion] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
-    ports: list[HTTPServerPort] = field(default_factory=lambda: [HTTPServerPort(type="tcp", port=8080, secure=False)])
-    tls: TLSServerConfig = field(default_factory=lambda: TLSServerConfig())
+    protocols: list[Union[HTTPVersion, Literal["WebSocket"]]] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0", "WebSocket"]
+    tls: TLSConfig = field(default_factory=lambda: TLSConfig())
 
 class HTTPServer:
-    def __init__(self, config: Optional[HTTPServerConfig] = None, role: HTTPServerRole = HTTPServerRole.ORIGIN):
+    def __init__(self, config: Optional[HTTPServerConfig] = None, role: HTTPRole = HTTPRole.ORIGIN):
         self.role = role
         self.config = config or HTTPServerConfig()
 
-    def run(self):
+    def run(self, ports: list[HTTPPort] = [HTTPPort(type="tcp", value=8080, secure=False)]):
         ...
 
-    async def serve(self):
+    async def serve(self, ports: list[HTTPPort] = [HTTPPort(type="tcp", value=8080, secure=False)]):
         ...

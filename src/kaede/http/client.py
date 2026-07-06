@@ -2,19 +2,19 @@ from typing import Literal, Optional, Union
 from dataclasses import dataclass, field
 
 from ..url import URL
-from ..tls import TLSClientConfig
-from .models import HTTPVersion, HTTPHeaders, HTTPResponse
+from ..tls import TLSConfig
+from .models import HTTPVersion, HTTPRole, HTTPHeaders, HTTPResponse
 from .websocket import WSConnection
 
 @dataclass
 class HTTPClientConfig:
-    versions: list[HTTPVersion] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
-
-    tls: TLSClientConfig = field(default_factory=lambda: TLSClientConfig())
+    protocols: list[Union[HTTPVersion, Literal["WebSocket"]]] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0", "WebSocket"]
+    tls: TLSConfig = field(default_factory=lambda: TLSConfig())
 
 class HTTPClient:
-    def __init__(self, config: Optional[HTTPClientConfig] = None):
+    def __init__(self, config: Optional[HTTPClientConfig] = None, role: HTTPRole = HTTPRole.USER_AGENT):
         self.config = config or HTTPClientConfig()
+        self.role = role
 
     async def request(self, method: Literal["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"], url: Union[URL, str], headers: Optional[Union[HTTPHeaders, dict[str, str], list[tuple[str, list[str]]]]], cookies: Optional[dict[str, str]], timeout: Optional[float]) -> HTTPResponse:
         ...

@@ -270,7 +270,7 @@ class TCPHandler:
         self.on_connection = on_connection  # (connection: TCPConnection) -> None
         self.on_close = on_close            # (connection: TCPConnection) -> None
 
-class TCPProtocol(asyncio.Protocol):
+class TCPProtocol:
     def __init__(self, src: Optional[tuple[str, TCPPort]] = None, handler: Optional[TCPHandler] = None, *, validate_checksum: bool = True):
         self.src = src
         self.handler = handler

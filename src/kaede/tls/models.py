@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 from dataclasses import dataclass, field
+
+class TLSVersion(Enum):
+    TLSv1_0 = "TLSv1.0"
+    TLSv1_1 = "TLSv1.1"
+    TLSv1_2 = "TLSv1.2"
+    TLSv1_3 = "TLSv1.3"
+
+class TLSVerifyMode(Enum):
+    NONE     = "None"
+    OPTIONAL = "Optional"
+    REQUIRED = "Required"
 
 class TLSGroup(Enum):
     # Classic
@@ -221,17 +232,6 @@ class TLSCipher(Enum):
     TLS_AES_256_GCM_SHA384       = "TLS_AES_256_GCM_SHA384"
     TLS_CHACHA20_POLY1305_SHA256 = "TLS_CHACHA20_POLY1305_SHA256"
 
-class TLSVersion(Enum):
-    TLSv1_0 = "TLSv1.0"
-    TLSv1_1 = "TLSv1.1"
-    TLSv1_2 = "TLSv1.2"
-    TLSv1_3 = "TLSv1.3"
-
-class TLSVerifyMode(Enum):
-    NONE     = "None"
-    OPTIONAL = "Optional"
-    REQUIRED = "Required"
-
 GROUP_MAP: dict[str, TLSGroup] = {
     "x25519":               TLSGroup.X25519,
     "X25519":               TLSGroup.X25519,
@@ -262,52 +262,16 @@ GROUP_MAP: dict[str, TLSGroup] = {
 CIPHER_MAP: dict[str, TLSCipher] = {c.value: c for c in TLSCipher}
 
 @dataclass
-class TLSClientConfig:
+class TLSConfig:
     cafile: Optional[str] = None
     capath: Optional[str] = None
+    cadata: Optional[Union[str, bytes]] = None
 
     verify_mode: TLSVerifyMode = TLSVerifyMode.REQUIRED
     minimum_version: Literal["TLSv1.0", "TLSv1.1", "TLSv1.2", "TLSv1.3"] = "TLSv1.2"
 
     certfile: Optional[str] = None
     keyfile: Optional[str] = None
-
-    ciphers: list[TLSCipher] = field(default_factory=lambda: [
-        # TLS 1.3
-        TLSCipher.TLS_AES_128_GCM_SHA256,
-        TLSCipher.TLS_AES_256_GCM_SHA384,
-        TLSCipher.TLS_CHACHA20_POLY1305_SHA256,
-        # TLS 1.2 (ECDSA)
-        TLSCipher.ECDHE_ECDSA_AES128_GCM_SHA256,
-        TLSCipher.ECDHE_ECDSA_AES256_GCM_SHA384,
-        TLSCipher.ECDHE_ECDSA_CHACHA20_POLY1305,
-        # TLS 1.2 (RSA)
-        TLSCipher.ECDHE_RSA_AES128_GCM_SHA256,
-        TLSCipher.ECDHE_RSA_AES256_GCM_SHA384,
-        TLSCipher.ECDHE_RSA_CHACHA20_POLY1305
-    ])
-    groups: list[TLSGroup] = field(default_factory=lambda: [
-        # PQC (Hybrid)
-        TLSGroup.X25519MLKEM768,
-        TLSGroup.SECP384R1MLKEM1024,
-        TLSGroup.SECP256R1MLKEM768,
-        # PQC (Pure)
-        TLSGroup.MLKEM1024,
-        TLSGroup.MLKEM768,
-        # Classic
-        TLSGroup.X25519,
-        TLSGroup.prime256v1,
-        TLSGroup.secp384r1
-    ])
-
-@dataclass
-class TLSServerConfig:
-    certfile: Optional[str] = None
-    keyfile: Optional[str] = None
-    cafile: Optional[str] = None
-
-    verify_mode: TLSVerifyMode = TLSVerifyMode.REQUIRED
-    minimum_version: Literal["TLSv1.0", "TLSv1.1", "TLSv1.2", "TLSv1.3"] = "TLSv1.2"
 
     ciphers: list[TLSCipher] = field(default_factory=lambda: [
         # TLS 1.3

@@ -2,6 +2,7 @@ import os
 import json
 import gzip
 import zlib
+import xxhash
 import rjsmin
 import rcssmin
 import ipaddress
@@ -11,28 +12,81 @@ import minify_html
 from enum import Enum
 from scour import scour
 from typing import Any, Optional, Literal, Union, TypeVar, TypeAlias
-from importlib.metadata import version
 from dataclasses import dataclass, field
 from collections.abc import AsyncIterator
 
 from ..url import URL
-from .headers import ContentType
+from ..tcp import TCPPort
+from ..udp import UDPPort
+from .headers import CommaHeader, AcceptEncoding, ContentType, ETag, Cookie, SetCookie
 
 T = TypeVar("T")
 
 HTTPVersion: TypeAlias = Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
 
+class HTTPBroadRole(Enum):
+    CLIENT = "Client"
+    SERVER = "Server"
+
+    def vaild(self, specific: "HTTPRole") -> bool:
+        if specific == HTTPRole.USER_AGENT:
+            return self == HTTPBroadRole.CLIENT
+        elif specific != HTTPRole.USER_AGENT:
+            return self == HTTPBroadRole.SERVER
+
+    @staticmethod
+    def from_specific(specific: "HTTPRole") -> "HTTPBroadRole":
+        return HTTPBroadRole.CLIENT if specific == HTTPRole.USER_AGENT else HTTPBroadRole.SERVER
+
+class HTTPRole(Enum):
+    USER_AGENT = "User Agent"
+    ORIGIN     = "Origin"
+    PROXY      = "Proxy"
+    GATEWAY    = "Gateway"
+    TUNNEL     = "Tunnel"
+
+    def vaild(self, broad: "HTTPBroadRole") -> bool:
+        if broad == HTTPBroadRole.CLIENT:
+            return self == HTTPRole.USER_AGENT
+        elif broad == HTTPBroadRole.SERVER:
+            return self != HTTPRole.USER_AGENT
+
+    @staticmethod
+    def from_broad(broad: "HTTPBroadRole", server_default: Optional["HTTPRole"]) -> "HTTPRole":
+        return HTTPRole.USER_AGENT if broad == HTTPBroadRole.CLIENT else (server_default or HTTPRole.ORIGIN)
+
+@dataclass
+class HTTPPort:
+    type: Literal["uds", "tcp", "quic"] = "tcp"
+    value: Union[str, int, TCPPort, UDPPort] = TCPPort(80)
+    secure: bool = False
+
+    @property
+    def vaild(self) -> bool:
+        if self.type == "uds":
+            return isinstance(self.value, str)
+        elif self.type == "tcp":
+            return isinstance(self.value, TCPPort)
+        elif self.type == "quic":
+            return isinstance(self.value, UDPPort) and self.secure
+
 class HTTPHeaderCase(Enum):
     TITLECASE = "Title-Case" # for HTTP/1
     LOWERCASE = "lower-case" # for HTTP/2/3
 
+    def apply(self, name: str) -> str:
+        if self == HTTPHeaderCase.TITLECASE:
+            return name.title()
+        elif self == HTTPHeaderCase.LOWERCASE:
+            return name.lower()
+
+    @staticmethod
+    def from_version(version: HTTPVersion) -> "HTTPHeaderCase":
+        return HTTPHeaderCase.TITLECASE if version in ("HTTP/1.0", "HTTP/1.1") else HTTPHeaderCase.LOWERCASE
+
 class HTTPHeaders:
     def __init__(self, value: Union[str, bytes, list[tuple[str, list[str]]]], case: Optional[HTTPHeaderCase] = None):
-        self.case = case
-        if isinstance(value, (str, bytes)):
-            self.raw = HTTPHeaders.parse(value).raw
-        elif isinstance(value, list):
-            self.raw = value
+        ...
 
     def __getitem__(self, key: str) -> Optional[list[str]]:
         ...
@@ -69,7 +123,7 @@ class HTTPHeaders:
 class HTTPMessage:
     client: tuple[Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
 
-    protocol: Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"] = "HTTP/1.1"
+    protocol: HTTPVersion = "HTTP/1.1"
 
     headers: HTTPHeaders = field(default_factory=lambda: HTTPHeaders({}))
     trailers: Optional[HTTPHeaders] = None
@@ -84,8 +138,8 @@ class HTTPMessage:
     compression: bool = True
     minification: bool = False
 
-    compressed: Optional[Union[bytes, AsyncIterator[bytes]]] = None
-    minified: Optional[Union[bytes, AsyncIterator[bytes]]] = None
+    compressed: bool = False
+    minified: bool = False
 
     @property
     def text(self) -> str:
@@ -99,66 +153,171 @@ class HTTPMessage:
     def has_real_body(self) -> bool:
         return self.body is not None and isinstance(self.body, bytes)
 
-    def compress(self, encoding: Optional[str] = None):
-        if not (self.compression and self.body is not None and self.compressed is not None):
+    def compress(self, accept_encoding: str, *, max_offload_filesize: int = 32768):
+        if self.compression and not self.compressed and accept_encoding and isinstance(self.body, (bytes, str, os.PathLike)):
+            preference = ["zstd", "br", "gzip", "deflate"]
+            accept = AcceptEncoding.parse(accept_encoding)
+            acceptable = {c for c, q in accept.raw if q > 0}
+            wildcard_ok = any(c == "*" and q > 0 for c, q in accept.raw)
+
+            best = next((c for c in preference if c in acceptable or (wildcard_ok and c not in {c2 for c2, q in accept.raw if q == 0})), None)
+
+            if best is not None:
+                self.compress_with([best], max_offload_filesize=max_offload_filesize)
+
+    def compress_with(self, encodings: Optional[str] = None, *, max_offload_filesize: int = 32768):
+        if not (self.compression and not self.compressed and self.body is not None):
             return
 
-        if encoding == "zstd":
-            self.compressed = zstandard.ZstdCompressor(level=3).compress(self.body)
-        elif encoding == "br":
-            self.compressed = brotlicffi.compress(self.body, quality=4)
-        elif encoding == "gzip":
-            self.compressed = gzip.compress(self.body, compresslevel=6)
-        elif encoding == "deflate":
-            self.compressed = zlib.compress(self.body, level=6)
+        content_encoding = CommaHeader(self.headers.get("Content-Encoding", ""))
 
-        self.headers.set("Content-Encoding", encoding)
+        if isinstance(self.body, bytes):
+            for encoding in encodings:
+                if encoding == "zstd":
+                    self.body = zstandard.ZstdCompressor(level=3).compress(self.body)
+                elif encoding == "br":
+                    self.body = brotlicffi.compress(self.body, quality=4)
+                elif encoding == "gzip":
+                    self.body = gzip.compress(self.body, compresslevel=6)
+                elif encoding == "deflate":
+                    self.body = zlib.compress(self.body, level=6)
+                else:
+                    continue
 
-    def decompress(self, encoding: Optional[str] = None):
-        ...
+                content_encoding.append(encoding)
+                self.compressed = True
 
-    def minify(self):
-        if not (self.minification and self.has_real_body):
+            self.headers.set("Content-Encoding", str(content_encoding))
+
+        elif isinstance(self.body, (str, os.PathLike)):
+            filepath = self.body
+            filesize = os.stat(filepath).st_size
+
+            if 0 < filesize <= max_offload_filesize:
+                with open(filepath, "rb") as f:
+                    self.body = f.read()
+
+                self.compress_with(encodings, max_offload_filesize=max_offload_filesize)
+
+    def decompress(self, *, max_offload_filesize: int = 32768):
+        if not (self.compression and self.compressed and self.body is not None):
             return
 
-        content_type = ContentType(self.headers.get("Content-Type") or "")
+        content_encoding = CommaHeader(self.headers.get("Content-Encoding", ""))
 
-        try:
-            if content_type.essence.startswith("text/html"):
-                self.body = minify_html.minify(self.body.decode("utf-8", errors="replace"), minify_js=True, minify_css=True, keep_comments=True, keep_html_and_head_opening_tags=True).encode("utf-8")
-            elif content_type.essence.startswith("text/css"):
-                self.body = rcssmin.cssmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
-            elif content_type.essence.startswith(("text/javascript", "application/javascript")):
-                self.body = rjsmin.jsmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
-            elif content_type.essence.startswith("image/svg"):
-                options = scour.generateDefaultOptions()
-                options.newlines = False
-                options.shorten_ids = True
-                options.strip_comments = True
-                self.body = scour.scourString(self.body.decode("utf-8", errors="replace"), options).encode("utf-8")
-        except Exception:
-            pass
+        if isinstance(self.body, bytes):
+            for encoding in reversed(content_encoding.raw):
+                if encoding == "zstd":
+                    self.body = zstandard.ZstdDecompressor().decompress(self.body)
+                elif encoding == "br":
+                    self.body = brotlicffi.decompress(self.body)
+                elif encoding == "gzip":
+                    self.body = gzip.decompress(self.body)
+                elif encoding == "deflate":
+                    try:
+                        self.body = zlib.decompress(self.body)
+                    except zlib.error:
+                        self.body = zlib.decompress(self.body, -zlib.MAX_WBITS)
+                else:
+                    break
+
+            self.headers.remove("Content-Encoding")
+            self.compressed = False
+
+        elif isinstance(self.body, (str, os.PathLike)):
+            filepath = self.body
+            filesize = os.stat(filepath).st_size
+
+            if 0 < filesize <= max_offload_filesize:
+                with open(filepath, "rb") as f:
+                    self.body = f.read()
+
+                self.decompress()
+
+    def minify(self, *, max_offload_filesize: int = 32768):
+        if not (self.minification and not self.minified and self.body is not None):
+            return
+
+        content_type = ContentType(self.headers.get("Content-Type", ""))
+
+        if isinstance(self.body, bytes):
+            try:
+                if content_type.essence.startswith("text/html"):
+                    self.body = minify_html.minify(self.body.decode("utf-8", errors="replace"), minify_js=True, minify_css=True, keep_comments=True, keep_html_and_head_opening_tags=True).encode("utf-8")
+
+                elif content_type.essence.startswith("text/css"):
+                    self.body = rcssmin.cssmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
+
+                elif content_type.essence.startswith(("text/javascript", "application/javascript")):
+                    self.body = rjsmin.jsmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
+
+                elif content_type.essence.startswith("image/svg"):
+                    options = scour.generateDefaultOptions()
+                    options.newlines = False
+                    options.shorten_ids = True
+                    options.strip_comments = True
+
+                    self.body = scour.scourString(self.body.decode("utf-8", errors="replace"), options).encode("utf-8")
+
+                elif content_type.essence.startswith("application/json"):
+                    self.body = json.dumps(json.loads(self.body.decode())).encode()
+
+                else:
+                    return
+
+                self.minified = True
+
+            except Exception:
+                pass
+
+        elif isinstance(self.body, (str, os.PathLike)):
+            filepath = self.body
+            filesize = os.stat(filepath).st_size
+
+            if 0 < filesize <= max_offload_filesize:
+                with open(filepath, "rb") as f:
+                    self.body = f.read()
+
+                self.minify()
 
 @dataclass
 class HTTPRequest(HTTPMessage):
     method: Literal["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
     target: str
 
-    scheme: Literal["http", "https"] = "http"
-    secure: bool = False
-
-    headers: HTTPHeaders = field(default_factory=lambda: HTTPHeaders({"User-Agent": f"Kaede/{version('nercone-kaede')} (+https://github.com/nercone-rear/kaede/)"}))
-
     url: URL = field(init=False, repr=False)
 
     def __post_init__(self):
-        authority = self.headers.get("Host") or ""
+        authority = self.headers.get("Host", "")
         self.url = URL.from_target(self.target, self.scheme, authority)
+
+    @property
+    def cookies(self) -> Cookie:
+        return Cookie(self.headers.get("Cookie", ""))
+
+    @property
+    def is_websocket_upgrade(self) -> bool:
+        upgrade = self.headers.get("Upgrade", "").lower().strip()
+        connection_tokens = CommaHeader(self.headers.get("Connection", "")).raw
+
+        return (self.method == "GET") and (upgrade == "websocket") and any(t.strip().lower() == "upgrade" for t in connection_tokens)
 
 @dataclass
 class HTTPResponse(HTTPMessage):
     status_code: int = 200
 
-    headers: HTTPHeaders = field(default_factory=lambda: HTTPHeaders({"Server": "Kaede"}))
-
     range: Optional[tuple[int, int]] = field(default=None)
+
+    @property
+    def etag(self) -> ETag:
+        if isinstance(self.body, bytes):
+            return ETag(f'"{xxhash.xxh3_128(self.body).hexdigest()}"')
+        elif isinstance(self.body, (str, os.PathLike)):
+            stat = os.stat(self.body)
+            return ETag(f'"{int(stat.st_mtime_ns):x}-{stat.st_size:x}"')
+
+    def set_cookie(self, name: str, value: str, *, expires: Optional[str] = None, max_age: Optional[int] = None, domain: Optional[str] = None, path: Optional[str] = "/", secure: bool = False, httponly: bool = False, samesite: Optional[Literal["Strict", "Lax", "None"]] = None):
+        self.headers.append("Set-Cookie", str(SetCookie(name, value, expires=expires, max_age=max_age, domain=domain, path=path, secure=secure, httponly=httponly, samesite=samesite)))
+
+    def delete_cookie(self, name: str, *, domain: Optional[str] = None, path: Optional[str] = "/", secure: bool = False, httponly: bool = False, samesite: Optional[Literal["Strict", "Lax", "None"]] = None):
+        self.set_cookie(name, "", max_age=0, domain=domain, path=path, secure=secure, httponly=httponly, samesite=samesite)

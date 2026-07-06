@@ -110,7 +110,7 @@ class UDPHandler:
     def __init__(self, on_connection: Optional[Callable] = None):
         self.on_connection = on_connection  # (connection: UDPConnection) -> None
 
-class UDPProtocol(asyncio.Protocol):
+class UDPProtocol:
     def __init__(self, src: Optional[tuple[str, UDPPort]] = None, handler: Optional[UDPHandler] = None, *, validate_checksum: bool = True):
         self.src = src
         self.handler = handler
