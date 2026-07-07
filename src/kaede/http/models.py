@@ -11,7 +11,7 @@ import brotlicffi
 import minify_html
 from enum import Enum
 from scour import scour
-from typing import Any, Optional, Literal, List, Dict, Tuple, Union, TypeVar, TypeAlias
+from typing import Any, Optional, Literal, List, Dict, Tuple, Union, TypeVar
 from dataclasses import dataclass, field
 from collections.abc import AsyncIterator
 
@@ -22,8 +22,8 @@ from .headers import CommaHeader, AcceptEncoding, ContentType, ETag, Cookie, Set
 
 T = TypeVar("T")
 
-HTTPVersion: TypeAlias = Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
-HTTPMethod:  TypeAlias = Literal["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
+HTTPVersion = Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
+HTTPMethod  = Literal["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
 
 class HTTPBroadRole(Enum):
     CLIENT = "Client"

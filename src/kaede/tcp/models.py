@@ -1,4 +1,4 @@
-from typing import Annotated, TypeAlias
+from typing import Annotated
 from pydantic import Field
 
-TCPPort: TypeAlias = Annotated[int, Field(ge=0, le=65535)]
+TCPPort = Annotated[int, Field(ge=0, le=65535)]

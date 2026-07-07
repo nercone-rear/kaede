@@ -1,8 +1,8 @@
 import asyncio
-from typing import Optional, Dict, Tuple, Annotated, Callable, TypeAlias
+from typing import Optional, Dict, Tuple, Annotated, Callable
 from pydantic import Field
 
-UDPPort: TypeAlias = Annotated[int, Field(ge=0, le=65535)]
+UDPPort = Annotated[int, Field(ge=0, le=65535)]
 
 class UDPConnection:
     def __init__(self, src: Tuple[str, UDPPort], dst: Tuple[str, UDPPort], *, handler: Optional["UDPHandler"] = None, protocol: Optional["UDPProtocol"] = None):
