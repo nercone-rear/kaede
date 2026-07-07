@@ -104,7 +104,7 @@ kaede/
         │   ├── models.py    # 抽象化クラス
         │   ├── headers.py   # ヘッダー固有クラス
         │   ├── responses.py # レスポンス種類別のレスポンスクラス
-        │   ├── finalizer.py # リクエスト/レスポンスの後処理とHTTP仕様準拠の検証
+        │   ├── finalizer.py # リクエスト/レスポンスの後処理(Server/Dateヘッダーの付与等)とHTTP仕様準拠の検証
         │   └── websocket.py # WebSocket固有処理
         └── dns
             ├── api
