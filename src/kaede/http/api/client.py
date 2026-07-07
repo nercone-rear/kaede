@@ -1,15 +1,15 @@
 from typing import Literal, Optional, Union
 from dataclasses import dataclass, field
 
-from ..url import URL
-from ..tls import TLSConfig
-from .models import HTTPVersion, HTTPRole, HTTPHeaders, HTTPResponse
-from .websocket import WSConnection
+from ...url import URL
+from ...tls import TLSConfig
+from ..models import HTTPVersion, HTTPRole, HTTPHeaders, HTTPResponse
+from ..websocket import WSConnection
 
 @dataclass
 class HTTPClientConfig:
     protocols: list[Union[HTTPVersion, Literal["WebSocket"]]] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0", "WebSocket"]
-    tls: TLSConfig = field(default_factory=lambda: TLSConfig())
+    tls: Union[TLSConfig, dict[str, TLSConfig]] = field(default_factory=lambda: TLSConfig()) # config or {hostname/domain: config}
 
 class HTTPClient:
     def __init__(self, config: Optional[HTTPClientConfig] = None, role: HTTPRole = HTTPRole.USER_AGENT):

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from enum import Enum
-from typing import Optional, Literal, Union
+import ssl
+from enum import Enum, IntEnum, IntFlag, auto
+from typing import Optional, Union
 from dataclasses import dataclass, field
 
 class TLSVersion(Enum):
@@ -10,10 +11,9 @@ class TLSVersion(Enum):
     TLSv1_2 = "TLSv1.2"
     TLSv1_3 = "TLSv1.3"
 
-class TLSVerifyMode(Enum):
-    NONE     = "None"
-    OPTIONAL = "Optional"
-    REQUIRED = "Required"
+    @classmethod
+    def from_float(value: float) -> "TLSVersion":
+        return VERSION_MAP[value]
 
 class TLSGroup(Enum):
     # Classic
@@ -44,6 +44,10 @@ class TLSGroup(Enum):
     X25519MLKEM768     = "X25519MLKEM768"
     SECP256R1MLKEM768  = "SecP256r1MLKEM768"
     SECP384R1MLKEM1024 = "SecP384r1MLKEM1024"
+
+    @classmethod
+    def from_name(value: str) -> "TLSGroup":
+        return GROUP_MAP[value.upper()]
 
 class TLSCipher(Enum):
     # ADH (Anonymous DH)
@@ -232,47 +236,41 @@ class TLSCipher(Enum):
     TLS_AES_256_GCM_SHA384       = "TLS_AES_256_GCM_SHA384"
     TLS_CHACHA20_POLY1305_SHA256 = "TLS_CHACHA20_POLY1305_SHA256"
 
-GROUP_MAP: dict[str, TLSGroup] = {
-    "x25519":               TLSGroup.X25519,
-    "X25519":               TLSGroup.X25519,
-    "x448":                 TLSGroup.X448,
-    "prime256v1":           TLSGroup.prime256v1,
-    "secp256r1":            TLSGroup.prime256v1,
-    "P-256":                TLSGroup.prime256v1,
-    "secp384r1":            TLSGroup.secp384r1,
-    "P-384":                TLSGroup.secp384r1,
-    "secp521r1":            TLSGroup.secp521r1,
-    "P-521":                TLSGroup.secp521r1,
-    "brainpoolP256r1tls13": TLSGroup.brainpoolP256r1tls13,
-    "brainpoolP384r1tls13": TLSGroup.brainpoolP384r1tls13,
-    "brainpoolP512r1tls13": TLSGroup.brainpoolP512r1tls13,
-    "ffdhe2048":            TLSGroup.FFDHE2048,
-    "ffdhe3072":            TLSGroup.FFDHE3072,
-    "ffdhe4096":            TLSGroup.FFDHE4096,
-    "ffdhe6144":            TLSGroup.FFDHE6144,
-    "ffdhe8192":            TLSGroup.FFDHE8192,
-    "MLKEM512":             TLSGroup.MLKEM512,
-    "MLKEM768":             TLSGroup.MLKEM768,
-    "MLKEM1024":            TLSGroup.MLKEM1024,
-    "X25519MLKEM768":       TLSGroup.X25519MLKEM768,
-    "SecP256r1MLKEM768":    TLSGroup.SECP256R1MLKEM768,
-    "SecP384r1MLKEM1024":   TLSGroup.SECP384R1MLKEM1024
-}
+    @classmethod
+    def from_name(value: str) -> "TLSCipher":
+        return CIPHER_MAP[value.upper()]
 
-CIPHER_MAP: dict[str, TLSCipher] = {c.value: c for c in TLSCipher}
+VERSION_MAP: dict[float, TLSVersion] = {float(v.value.split("v")[1]): v for v in TLSVersion}
+GROUP_MAP:   dict[str, TLSGroup]     = {g.value.upper(): g for g in TLSGroup}
+CIPHER_MAP:  dict[str, TLSCipher]    = {c.value.upper(): c for c in TLSCipher}
 
-@dataclass
+@dataclass(kw_only=True)
 class TLSConfig:
+    minimum_version: TLSVersion = TLSVersion.TLSv1_2
+
     cafile: Optional[str] = None
     capath: Optional[str] = None
     cadata: Optional[Union[str, bytes]] = None
 
-    verify_mode: TLSVerifyMode = TLSVerifyMode.REQUIRED
-    minimum_version: Literal["TLSv1.0", "TLSv1.1", "TLSv1.2", "TLSv1.3"] = "TLSv1.2"
-
     certfile: Optional[str] = None
-    keyfile: Optional[str] = None
+    keyfile:  Optional[str] = None
 
+    verify_mode:  ssl.VerifyMode  = ssl.VerifyMode.CERT_REQUIRED
+    verify_flags: ssl.VerifyFlags = ssl.VerifyFlags.VERIFY_X509_TRUSTED_FIRST
+
+    groups: list[TLSGroup] = field(default_factory=lambda: [
+        # PQC (Hybrid)
+        TLSGroup.X25519MLKEM768,
+        TLSGroup.SECP384R1MLKEM1024,
+        TLSGroup.SECP256R1MLKEM768,
+        # PQC (Pure)
+        TLSGroup.MLKEM1024,
+        TLSGroup.MLKEM768,
+        # Classic
+        TLSGroup.X25519,
+        TLSGroup.prime256v1,
+        TLSGroup.secp384r1
+    ])
     ciphers: list[TLSCipher] = field(default_factory=lambda: [
         # TLS 1.3
         TLSCipher.TLS_AES_128_GCM_SHA256,
@@ -286,17 +284,4 @@ class TLSConfig:
         TLSCipher.ECDHE_RSA_AES128_GCM_SHA256,
         TLSCipher.ECDHE_RSA_AES256_GCM_SHA384,
         TLSCipher.ECDHE_RSA_CHACHA20_POLY1305
-    ])
-    groups: list[TLSGroup] = field(default_factory=lambda: [
-        # PQC (Hybrid)
-        TLSGroup.X25519MLKEM768,
-        TLSGroup.SECP384R1MLKEM1024,
-        TLSGroup.SECP256R1MLKEM768,
-        # PQC (Pure)
-        TLSGroup.MLKEM1024,
-        TLSGroup.MLKEM768,
-        # Classic
-        TLSGroup.X25519,
-        TLSGroup.prime256v1,
-        TLSGroup.secp384r1
     ])

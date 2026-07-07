@@ -77,9 +77,9 @@ class DNSRecordData(ABC):
 class DNSRecord:
     name: str
     type: DNSRecordType
-    rclass: DNSRecordClass = DNSRecordClass.IN
-    ttl: int = 0
     data: DNSRecordData
+    ttl: int = 0
+    rclass: DNSRecordClass = DNSRecordClass.IN
 
 class DNSRecords:
     def __init__(self, value: Union[str, bytes, list[DNSRecord]]):

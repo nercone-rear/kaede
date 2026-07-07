@@ -66,9 +66,9 @@ class HTTPPort:
         if self.type == "uds":
             return isinstance(self.value, str)
         elif self.type == "tcp":
-            return isinstance(self.value, TCPPort)
+            return isinstance(self.value, TCPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
         elif self.type == "quic":
-            return isinstance(self.value, UDPPort) and self.secure
+            return (isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)) and self.secure
 
 class HTTPHeaderCase(Enum):
     TITLECASE = "Title-Case" # for HTTP/1
@@ -312,6 +312,7 @@ class HTTPResponse(HTTPMessage):
     def etag(self) -> ETag:
         if isinstance(self.body, bytes):
             return ETag(f'"{xxhash.xxh3_128(self.body).hexdigest()}"')
+
         elif isinstance(self.body, (str, os.PathLike)):
             stat = os.stat(self.body)
             return ETag(f'"{int(stat.st_mtime_ns):x}-{stat.st_size:x}"')
