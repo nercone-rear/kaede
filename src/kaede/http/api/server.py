@@ -16,8 +16,8 @@ class HTTPServerConfig:
 
 class HTTPServer:
     def __init__(self, config: Optional[HTTPServerConfig] = None, role: HTTPRole = HTTPRole.ORIGIN):
-        self.role = role
         self.config = config or HTTPServerConfig()
+        self.role = role
 
     def run(self, ports: List[Tuple[str, HTTPPort]] = [("0.0.0.0", HTTPPort(type="tcp", value=8080, secure=False))]):
         ...
