@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Optional, Union, Literal, List, Dict, Tuple, TypeVar
 
 T = TypeVar("T")
