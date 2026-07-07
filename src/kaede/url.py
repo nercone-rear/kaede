@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass
 
 @dataclass
@@ -15,7 +15,7 @@ class URL:
         ...
 
     @property
-    def params(self) -> dict[str, list[str]]:
+    def params(self) -> Dict[str, List, Dict, Tuple[str]]:
         ...
 
     @property

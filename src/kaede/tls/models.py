@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import ssl
-from enum import Enum, IntEnum, IntFlag, auto
-from typing import Optional, Union
+from enum import Enum
+from typing import Optional, Union, List, Dict
 from dataclasses import dataclass, field
 
 class TLSVersion(Enum):
@@ -240,9 +240,9 @@ class TLSCipher(Enum):
     def from_name(value: str) -> "TLSCipher":
         return CIPHER_MAP[value.upper()]
 
-VERSION_MAP: dict[float, TLSVersion] = {float(v.value.split("v")[1]): v for v in TLSVersion}
-GROUP_MAP:   dict[str, TLSGroup]     = {g.value.upper(): g for g in TLSGroup}
-CIPHER_MAP:  dict[str, TLSCipher]    = {c.value.upper(): c for c in TLSCipher}
+VERSION_MAP: Dict[float, TLSVersion] = {float(v.value.split("v")[1]): v for v in TLSVersion}
+GROUP_MAP:   Dict[str, TLSGroup]     = {g.value.upper(): g for g in TLSGroup}
+CIPHER_MAP:  Dict[str, TLSCipher]    = {c.value.upper(): c for c in TLSCipher}
 
 @dataclass(kw_only=True)
 class TLSConfig:
@@ -258,7 +258,7 @@ class TLSConfig:
     verify_mode:  ssl.VerifyMode  = ssl.VerifyMode.CERT_REQUIRED
     verify_flags: ssl.VerifyFlags = ssl.VerifyFlags.VERIFY_X509_TRUSTED_FIRST
 
-    groups: list[TLSGroup] = field(default_factory=lambda: [
+    groups: List[TLSGroup] = field(default_factory=lambda: [
         # PQC (Hybrid)
         TLSGroup.X25519MLKEM768,
         TLSGroup.SECP384R1MLKEM1024,
@@ -271,7 +271,7 @@ class TLSConfig:
         TLSGroup.prime256v1,
         TLSGroup.secp384r1
     ])
-    ciphers: list[TLSCipher] = field(default_factory=lambda: [
+    ciphers: List[TLSCipher] = field(default_factory=lambda: [
         # TLS 1.3
         TLSCipher.TLS_AES_128_GCM_SHA256,
         TLSCipher.TLS_AES_256_GCM_SHA384,

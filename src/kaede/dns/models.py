@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Union
+from typing import Union, List, Dict, Tuple
 from dataclasses import dataclass
 
 class DNSRecordType(Enum):
@@ -82,7 +82,7 @@ class DNSRecord:
     rclass: DNSRecordClass = DNSRecordClass.IN
 
 class DNSRecords:
-    def __init__(self, value: Union[str, bytes, list[DNSRecord]]):
+    def __init__(self, value: Union[str, bytes, List, Dict, Tuple[DNSRecord]]):
         if isinstance(value, (str, bytes)):
             self.raw = DNSRecords.parse(value).raw
         elif isinstance(value, list):

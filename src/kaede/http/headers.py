@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional, Union, Literal, TypeVar
+from typing import Optional, Union, Literal, List, Dict, Tuple, TypeVar
 
 T = TypeVar("T")
 
 class CommaHeader:
-    def __init__(self, value: Union[str, list[str]]):
+    def __init__(self, value: Union[str, List, Dict, Tuple[str]]):
         if isinstance(value, (str, bytes)):
             self.raw = CommaHeader.parse(value).raw
         elif isinstance(value, list):
@@ -17,7 +17,7 @@ class CommaHeader:
     def __contains__(self, item: str) -> bool:
         return item in self.raw
 
-    def set(self, value: Union[str, list[str]]):
+    def set(self, value: Union[str, List, Dict, Tuple[str]]):
         if isinstance(value, str):
             self.raw = [value]
         elif isinstance(value, list):
@@ -37,7 +37,7 @@ class CommaHeader:
         return ", ".join(self.raw)
 
 class Link:
-    def __init__(self, value: Union[str, list[tuple[str, dict[str, str]]]]):
+    def __init__(self, value: Union[str, List, Dict, Tuple[Tuple[str, Dict[str, str]]]]):
         ...
 
     @classmethod
@@ -48,7 +48,7 @@ class Link:
         ...
 
 class AcceptEncoding:
-    def __init__(self, value: Union[str, list[tuple[str, float]]]):
+    def __init__(self, value: Union[str, List, Dict, Tuple[Tuple[str, float]]]):
         ...
 
     @classmethod
@@ -74,7 +74,7 @@ class ContentType:
     def boundary(self) -> str:
         ...
 
-    def parse(self) -> tuple[str, str, dict[str, str]]:
+    def parse(self) -> Tuple[str, str, Dict[str, str]]:
         ...
 
     def build(self) -> str:
@@ -115,7 +115,7 @@ class ETag:
         return self.opaque_tag == ETag(other).opaque_tag
 
 class Cookie:
-    def __init__(self, value: Union[str, dict[str, str]]):
+    def __init__(self, value: Union[str, Dict[str, str]]):
         if isinstance(value, (str, bytes)):
             self.raw = Cookie.parse(value).raw
         elif isinstance(value, dict):
@@ -138,7 +138,7 @@ class Cookie:
     def get(self, key: str, default: Optional[T] = None) -> Optional[Union[str, T]]:
         return self.raw.get(key, default)
 
-    def items(self) -> list[tuple[str, str]]:
+    def items(self) -> List[Tuple[str, str]]:
         return list(self.raw.items())
 
     @classmethod

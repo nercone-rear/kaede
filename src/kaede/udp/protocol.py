@@ -1,11 +1,11 @@
 import asyncio
-from typing import Optional, Annotated, Callable, TypeAlias
+from typing import Optional, Dict, Tuple, Annotated, Callable, TypeAlias
 from pydantic import Field
 
 UDPPort: TypeAlias = Annotated[int, Field(ge=0, le=65535)]
 
 class UDPConnection:
-    def __init__(self, src: tuple[str, UDPPort], dst: tuple[str, UDPPort], *, handler: Optional["UDPHandler"] = None, protocol: Optional["UDPProtocol"] = None):
+    def __init__(self, src: Tuple[str, UDPPort], dst: Tuple[str, UDPPort], *, handler: Optional["UDPHandler"] = None, protocol: Optional["UDPProtocol"] = None):
         self.src = src
         self.dst = dst
         self.handler = handler
@@ -22,8 +22,8 @@ class UDPHandler:
         self.on_connection = on_connection  # (connection: UDPConnection) -> None
 
 class UDPProtocol(asyncio.DatagramProtocol):
-    def __init__(self, src: Optional[tuple[str, UDPPort]] = None, handler: Optional[UDPHandler] = None):
+    def __init__(self, src: Optional[Tuple[str, UDPPort]] = None, handler: Optional[UDPHandler] = None):
         self.src = src
         self.handler = handler
-        self.connections: dict[tuple[str, UDPPort], UDPConnection] = {}
+        self.connections: Dict[Tuple[str, UDPPort], UDPConnection] = {}
     ...

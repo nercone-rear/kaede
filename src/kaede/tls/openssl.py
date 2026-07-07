@@ -3,7 +3,7 @@ import sys
 import glob
 import ctypes
 import ctypes.util
-from typing import Optional
+from typing import Optional, List
 
 from .errors import TLSLibraryNotFoundError
 
@@ -28,8 +28,8 @@ class OpenSSL:
             raise TLSLibraryNotFoundError(f"Could not detect OpenSSL lib{name}. You can specify it using the KAEDE_OPENSSL/KAEDE_LIB{name.upper()} environ.")
 
     @staticmethod
-    def candidate_paths(name: str) -> list[str]:
-        paths: list[str] = []
+    def candidate_paths(name: str) -> List[str]:
+        paths: List[str] = []
 
         for path in [os.environ.get(f"KAEDE_LIB{name.upper()}", ""), os.environ.get("KAEDE_OPENSSL", "")]:
             if not path:
@@ -88,7 +88,7 @@ class OpenSSL:
         if found:
             paths.append(found)
 
-        unique: list[str] = []
+        unique: List[str] = []
 
         for path in paths:
             if path not in unique:

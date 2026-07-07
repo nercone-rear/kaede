@@ -1,4 +1,4 @@
-from typing import Optional, Literal, Union, Callable
+from typing import Optional, Literal, List, Tuple, Union, Callable
 from dataclasses import dataclass, field
 
 from ...tls import TLSConfig
@@ -11,7 +11,7 @@ class Handler:
 
 @dataclass
 class HTTPServerConfig:
-    protocols: list[Union[HTTPVersion, Literal["WebSocket"]]] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0", "WebSocket"]
+    protocols: List[Union[HTTPVersion, Literal["WebSocket"]]] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0", "WebSocket"]
     tls: TLSConfig = field(default_factory=lambda: TLSConfig())
 
 class HTTPServer:
@@ -19,8 +19,8 @@ class HTTPServer:
         self.role = role
         self.config = config or HTTPServerConfig()
 
-    def run(self, ports: list[HTTPPort] = [HTTPPort(type="tcp", value=8080, secure=False)]):
+    def run(self, ports: List[Tuple[str, HTTPPort]] = [("0.0.0.0", HTTPPort(type="tcp", value=8080, secure=False))]):
         ...
 
-    async def serve(self, ports: list[HTTPPort] = [HTTPPort(type="tcp", value=8080, secure=False)]):
+    async def serve(self, ports: List[Tuple[str, HTTPPort]] = [("0.0.0.0", HTTPPort(type="tcp", value=8080, secure=False))]):
         ...

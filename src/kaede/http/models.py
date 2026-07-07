@@ -11,7 +11,7 @@ import brotlicffi
 import minify_html
 from enum import Enum
 from scour import scour
-from typing import Any, Optional, Literal, Union, TypeVar, TypeAlias
+from typing import Any, Optional, Literal, List, Dict, Tuple, Union, TypeVar, TypeAlias
 from dataclasses import dataclass, field
 from collections.abc import AsyncIterator
 
@@ -23,6 +23,7 @@ from .headers import CommaHeader, AcceptEncoding, ContentType, ETag, Cookie, Set
 T = TypeVar("T")
 
 HTTPVersion: TypeAlias = Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
+HTTPMethod:  TypeAlias = Literal["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
 
 class HTTPBroadRole(Enum):
     CLIENT = "Client"
@@ -85,25 +86,25 @@ class HTTPHeaderCase(Enum):
         return HTTPHeaderCase.TITLECASE if version in ("HTTP/1.0", "HTTP/1.1") else HTTPHeaderCase.LOWERCASE
 
 class HTTPHeaders:
-    def __init__(self, value: Union[str, bytes, list[tuple[str, list[str]]]], case: Optional[HTTPHeaderCase] = None):
+    def __init__(self, value: Union[str, bytes, List, Dict, Tuple[Tuple[str, List, Dict, Tuple[str]]]], case: Optional[HTTPHeaderCase] = None):
         ...
 
-    def __getitem__(self, key: str) -> Optional[list[str]]:
+    def __getitem__(self, key: str) -> Optional[List[str]]:
         ...
 
-    def __setitem__(self, key: str, value: Union[str, list[str]]):
+    def __setitem__(self, key: str, value: Union[str, List, Dict, Tuple[str]]):
         ...
 
     def __contains__(self, item: str):
         ...
 
-    def items(self) -> list[tuple[str, str]]:
+    def items(self) -> List[Tuple[str, str]]:
         ...
 
     def get(self, key: str, default: Optional[T] = None) -> Optional[Union[str, T]]:
         ...
 
-    def set(self, key: str, value: Union[str, list[str]], override: bool = True):
+    def set(self, key: str, value: Union[str, List, Dict, Tuple[str]], override: bool = True):
         ...
 
     def append(self, key: str, value: str):
@@ -121,7 +122,7 @@ class HTTPHeaders:
 
 @dataclass
 class HTTPMessage:
-    client: tuple[Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
+    client: Tuple[Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
 
     protocol: HTTPVersion = "HTTP/1.1"
 
@@ -282,7 +283,7 @@ class HTTPMessage:
 
 @dataclass
 class HTTPRequest(HTTPMessage):
-    method: Literal["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
+    method: HTTPMethod
     target: str
 
     url: URL = field(init=False, repr=False)
@@ -306,7 +307,7 @@ class HTTPRequest(HTTPMessage):
 class HTTPResponse(HTTPMessage):
     status_code: int = 200
 
-    range: Optional[tuple[int, int]] = field(default=None)
+    range: Optional[Tuple[int, int]] = field(default=None)
 
     @property
     def etag(self) -> ETag:
