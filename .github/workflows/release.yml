@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  build-openssl:
+  build-openssl-3:
     runs-on: ubuntu-latest
     if: "!github.event.release.prerelease"
 
@@ -48,30 +48,80 @@ jobs:
           make -j$(nproc)
           make install_sw
 
+  build-openssl-4:
+    runs-on: ubuntu-latest
+    if: "!github.event.release.prerelease"
+
+    outputs:
+      version: ${{ steps.openssl-version.outputs.version }}
+      cache-key: ${{ steps.openssl-version.outputs.cache-key }}
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Resolve latest OpenSSL 4.x version
+        id: openssl-version
+        run: |
+          VERSION=$(gh api repos/openssl/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-4\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
+          echo "Resolved OpenSSL ${VERSION}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v3" >> $GITHUB_OUTPUT
+
+      - name: Cache OpenSSL build
+        id: cache-openssl
+        uses: actions/cache@v4
+        with:
+          path: ~/openssl-4
+          key: ${{ steps.openssl-version.outputs.cache-key }}
+
+      - name: Build OpenSSL ${{ steps.openssl-version.outputs.version }}
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
+        run: |
+          VERSION="${{ steps.openssl-version.outputs.version }}"
+          sudo apt-get update -q
+          sudo apt-get install -y build-essential
+          curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-${VERSION}/openssl-${VERSION}.tar.gz" \
+            | tar xz
+          cd "openssl-${VERSION}"
+          ./Configure --prefix="$HOME/openssl-4" --openssldir="$HOME/openssl-4" --libdir=lib shared no-docs
+          make -j$(nproc)
+          make install_sw
+
   test-linux:
-    needs: build-openssl
+    needs: [build-openssl-3, build-openssl-4]
     runs-on: ubuntu-latest
     if: "!github.event.release.prerelease"
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        openssl-version: [3, 4]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore OpenSSL build cache
+      - name: Restore OpenSSL 3 build cache
+        if: matrix.openssl-version == 3
         uses: actions/cache/restore@v4
         with:
           path: ~/openssl-3
-          key: ${{ needs.build-openssl.outputs.cache-key }}
+          key: ${{ needs.build-openssl-3.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Restore OpenSSL 4 build cache
+        if: matrix.openssl-version == 4
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/openssl-4
+          key: ${{ needs.build-openssl-4.outputs.cache-key }}
           fail-on-cache-miss: true
 
       - name: Register OpenSSL and Set KAEDE_OPENSSL
         run: |
-          LIBDIR="$HOME/openssl-3/lib"
+          LIBDIR="$HOME/openssl-${{ matrix.openssl-version }}/lib"
           echo "Using OpenSSL lib dir: ${LIBDIR}"
           test -d "${LIBDIR}" || { echo "lib directory not found: ${LIBDIR}"; exit 1; }
-          echo "${LIBDIR}" | sudo tee /etc/ld.so.conf.d/openssl35.conf
+          echo "${LIBDIR}" | sudo tee /etc/ld.so.conf.d/openssl-kaede.conf
           sudo ldconfig
           echo "KAEDE_OPENSSL=${LIBDIR}" >> $GITHUB_ENV
           echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" >> $GITHUB_ENV
@@ -96,16 +146,17 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        openssl-version: [3, 4]
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install OpenSSL via Homebrew
-        run: brew install openssl@3
+        run: brew install openssl@${{ matrix.openssl-version }}
 
       - name: Set KAEDE_OPENSSL
         run: |
-          LIBDIR="$(brew --prefix openssl@3)/lib"
+          LIBDIR="$(brew --prefix openssl@${{ matrix.openssl-version }})/lib"
           echo "Using OpenSSL lib dir: ${LIBDIR}"
           test -d "${LIBDIR}" || { echo "lib directory not found: ${LIBDIR}"; exit 1; }
           echo "KAEDE_OPENSSL=${LIBDIR}" >> $GITHUB_ENV
