@@ -1,5 +1,6 @@
 import os
 import json
+import mimetypes
 from typing import Optional, Union, Tuple
 from pathlib import Path
 
@@ -17,7 +18,7 @@ class PlainTextResponse(HTTPResponse):
         self.headers.set("Content-Type", "text/plain", override=False)
 
 class HTMLResponse(HTTPResponse):
-    def __init__(self, content: str, *, status_code: int = 200, headers: Optional[HTTPHeaders] = None, compression: bool = True, minification: bool = True, range: Optional[Tuple[int, int]] = None):
+    def __init__(self, content: str, *, status_code: int = 200, headers: Optional[HTTPHeaders] = None, compression: bool = True, minification: bool = False, range: Optional[Tuple[int, int]] = None):
         self.body = content.encode()
         self.status_code = status_code
         self.headers = headers or HTTPHeaders({})
@@ -44,13 +45,13 @@ class JSONResponse(HTTPResponse):
         self.status_code = status_code
         self.headers = headers or HTTPHeaders({})
         self.compression = compression
-        self.minification = False
+        self.minification = minification
         self.range = range
 
         self.headers.set("Content-Type", "application/json", override=False)
 
 class FileResponse(HTTPResponse):
-    def __init__(self, path: Union[os.PathLike, Path], *, status_code: int = 200, headers: Optional[HTTPHeaders] = None, content_type: Optional[str] = None, compression: bool = True, minification: bool = True, range: Optional[Tuple[int, int]] = None):
+    def __init__(self, path: Union[os.PathLike, Path], *, status_code: int = 200, headers: Optional[HTTPHeaders] = None, content_type: Optional[str] = None, compression: bool = True, minification: bool = False, range: Optional[Tuple[int, int]] = None):
         self.body = str(path) if isinstance(path, Path) else path
         self.status_code = status_code
         self.headers = headers or HTTPHeaders({})
@@ -59,6 +60,10 @@ class FileResponse(HTTPResponse):
         self.range = range
 
         if content_type is not None:
+            self.headers.set("Content-Type", content_type)
+
+        elif "Content-Type" not in self.headers:
+            content_type, _ = mimetypes.guess_type(os.fspath(path))
             self.headers.set("Content-Type", content_type)
 
 class RedirectResponse(HTTPResponse):
