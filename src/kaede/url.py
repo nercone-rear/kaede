@@ -10,8 +10,7 @@ class URL:
     query: str
     fragment: str
 
-    @classmethod
-    def from_target(cls, target: str, scheme: str = "http", authority: str = "") -> "URL":
+    def __str__(self) -> str:
         ...
 
     @property
@@ -20,7 +19,4 @@ class URL:
 
     @property
     def netloc(self) -> str:
-        ...
-
-    def __str__(self) -> str:
         ...

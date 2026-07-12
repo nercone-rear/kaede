@@ -6,6 +6,160 @@ Kaede is a Python library for processing commonly used protocols. (e.g. TCP, UDP
 
 Please read README.md for details.
 
+## Directory Structure
+```
+kaede/
+├── pyproject.toml # プロジェクト設定
+├── uv.lock        # 依存関係ロックファイル
+├── tests          # 自動テスト (pytest)
+│   └── ...
+└── src
+    └── kaede
+        ├── __init__.py
+        ├── ip.py        # IP関連の抽象化クラス
+        ├── url.py       # URL
+        ├── constants.py # 定数 (共通)
+        ├── tls
+        │   ├── __init__.py
+        │   ├── models.py  # 抽象化クラス
+        │   ├── errors.py  # 例外クラス
+        │   └── openssl.py # OpenSSL (ctypes)
+        ├── uds
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # UDSクライアント (高水準API)
+        │   │   └── server.py # UDSサーバー    (高水準API)
+        │   ├── __init__.py
+        │   ├── errors.py   # 例外クラス
+        │   ├── models.py   # 抽象化クラス
+        │   └── protocol.py # プロトコル
+        ├── tcp
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # TCPクライアント (高水準API)
+        │   │   └── server.py # TCPサーバー    (高水準API)
+        │   ├── __init__.py
+        │   ├── tls.py      # TCP固有のTLS関連処理
+        │   ├── errors.py   # 例外クラス
+        │   ├── models.py   # 抽象化クラス
+        │   └── protocol.py # プロトコル
+        ├── udp
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # UDPクライアント (高水準API)
+        │   │   └── server.py # UDPサーバー    (高水準API)
+        │   ├── __init__.py
+        │   ├── errors.py   # 例外クラス
+        │   ├── models.py   # 抽象化クラス
+        │   └── protocol.py # プロトコル
+        ├── mail
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # メールクライアント (高水準API)
+        │   │   └── server.py # メールサーバー    (高水準API)
+        │   ├── helpers
+        │   │   ├── __init__.py
+        │   │   └── dns.py # DNS 関連処理 (MXレコード等)
+        │   ├── __init__.py
+        │   ├── errors.py   # 例外クラス
+        │   ├── models.py   # 抽象化クラス
+        │   ├── parser.py   # パーサー
+        │   └── protocol.py # プロトコル
+        ├── smtp
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # SMTPクライアント (高水準API)
+        │   │   └── server.py # SMTPサーバー    (高水準API)
+        │   ├── __init__.py
+        │   ├── tls.py      # SMTP固有のTLS関連処理
+        │   ├── errors.py   # 例外クラス
+        │   ├── models.py   # 抽象化クラス
+        │   └── protocol.py # プロトコル
+        ├── imap
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # IMAPクライアント (高水準API)
+        │   │   └── server.py # IMAPサーバー    (高水準API)
+        │   ├── __init__.py
+        │   ├── tls.py      # IMAP固有のTLS関連処理
+        │   ├── errors.py   # 例外クラス
+        │   ├── models.py   # 抽象化クラス
+        │   └── protocol.py # プロトコル
+        ├── pop3
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # POP3クライアント (高水準API)
+        │   │   └── server.py # POP3サーバー    (高水準API)
+        │   ├── __init__.py
+        │   ├── tls.py      # POP3固有のTLS関連処理
+        │   ├── errors.py   # 例外クラス
+        │   ├── models.py   # 抽象化クラス
+        │   └── protocol.py # プロトコル
+        ├── quic
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # QUICクライアント (高水準API)
+        │   │   └── server.py # QUICサーバー    (高水準API)
+        │   ├── __init__.py
+        │   ├── tls.py      # QUIC固有のTLS関連処理
+        │   ├── errors.py   # 例外クラス
+        │   ├── models.py   # 抽象化クラス
+        │   └── protocol.py # プロトコル
+        ├── http
+        │   ├── api
+        │   │   ├── __init__.py
+        │   │   ├── client.py # HTTPクライアント (高水準API)
+        │   │   └── server.py # HTTPサーバー    (高水準API)
+        │   ├── helpers
+        │   │   ├── __init__.py
+        │   │   ├── dns.py   # DNS   関連処理 (HTTPSレコード等)
+        │   │   ├── hsts.py  # HSTS  関連処理
+        │   │   ├── hpack.py # HPACK 関連処理
+        │   │   └── qpack.py # QPACK 関連処理
+        │   ├── protocol
+        │   │   ├── __init__.py
+        │   │   ├── h1.py      # HTTP/1.0/1.1 固有処理
+        │   │   ├── h2.py      # HTTP/2.0     固有処理
+        │   │   ├── h3.py      # HTTP/3.0     固有処理
+        │   │   └── handler.py # UDS/TCP/QUIC 接続ハンドラ
+        │   ├── __init__.py
+        │   ├── errors.py    # 例外クラス
+        │   ├── models.py    # 抽象化クラス
+        │   ├── headers.py   # ヘッダー固有クラス
+        │   ├── responses.py # レスポンス種類別のレスポンスクラス
+        │   ├── finalizer.py # リクエスト/レスポンスの後処理(Server/Dateヘッダーの付与等)とHTTP仕様準拠の検証
+        │   └── websocket.py # WebSocket固有処理
+        └── dns
+            ├── api
+            │   ├── __init__.py
+            │   ├── client.py # DNSクライアント (高水準API)
+            │   └── server.py # DNSサーバー    (高水準API)
+            ├── helpers
+            │   ├── __init__.py
+            │   └── dnssec.py # DNSSEC 関連処理
+            ├── protocol
+            │   ├── __init__.py
+            │   ├── tcp.py     # DNS over TCP   固有処理
+            │   ├── udp.py     # DNS over UDP   固有処理
+            │   ├── tls.py     # DNS over TLS   固有処理
+            │   ├── https.py   # DNS over HTTPS 固有処理
+            │   └── handler.py # TCP/UDP/HTTP   接続ハンドラ
+            ├── __init__.py
+            ├── errors.py  # 例外クラス
+            ├── models.py  # レコード種別/レコードクラス/レコードデータ/レコード/レコード一覧 クラス
+            └── records.py # レコード種類別のレコードデータクラス
+```
+
+## Code Style
+The Kaede source code style differs in some ways from the standard style of its respective languages. Please maintain the existing code structure and style.
+
+In Python:
+- Private constants/variables/functions do not exist (there are no constants/variables/functions starting with "_").
+- Direct placement of constants/variables/functions in files is discouraged (simple processes or processes that are not particularly long should be placed as methods within the target class. For example, a helper function that only determines whether an HTTP message status code is a server-side error should be placed in the HTTPMessage class, while excessively long functions should be placed in locations like `helpers.py` or `helpers/*.py`).
+- Use constant/variable/function names that are simple but whose functionality and behavior can be inferred from the name (e.g., instead of hoge, fuga, aaaa, untitled, or cleanup_stale_socket, use cleanup, free, or drain).
+- Classify objects as much as possible (instead of using redundant arguments, make them easier to handle by using classes or data classes, such as DNSRecord for DNS records and HTTPMessage for HTTP messages).
+- ...and so on. There are other conventions as well. If you discover any characteristics while working, please follow those patterns.
+
 ## Automated Testing
 pytest is used for automated testing. While minimal tests can be covered by automated tests, they are not perfect, so prioritize manual testing as much as possible.
 

@@ -7,7 +7,7 @@ class IPVersion(Enum):
     IPv6 = "IPv6"
 
     @staticmethod
-    def from_address(address: Union[ipaddress.IPv4Address, ipaddress.IPv6Address]):
+    def from_address(address: Union[ipaddress.IPv4Address, ipaddress.IPv6Address]) -> "IPVersion":
         if isinstance(address, ipaddress.IPv4Address):
             return IPVersion.IPv4
         elif isinstance(address, ipaddress.IPv6Address):
