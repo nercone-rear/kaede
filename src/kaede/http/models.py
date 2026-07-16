@@ -133,7 +133,6 @@ class HTTPMessage:
     early_data: bool = False
 
     compression: bool = True
-    minification: bool = False
 
     compressed: bool = False
     minified: bool = False
