@@ -13,10 +13,6 @@ requires-python = ">=3.9"
 dependencies = [
     "uvloop",
     "pydantic",
-    "minify-html",
-    "rcssmin",
-    "rjsmin",
-    "scour",
     "xxhash",
     "zstandard",
     "brotlicffi"

@@ -1,11 +1,14 @@
 import asyncio
-from typing import Optional, Dict, Tuple, Annotated, Callable
+from typing import Optional, Dict, Tuple, TYPE_CHECKING
 from pydantic import Field
 
-UDPPort = Annotated[int, Field(ge=0, le=65535)]
+from .models import UDPPort
+
+if TYPE_CHECKING:
+    from .api.server import UDPHandler
 
 class UDPConnection:
-    def __init__(self, src: Tuple[str, UDPPort], dst: Tuple[str, UDPPort], *, handler: Optional["UDPHandler"] = None, protocol: Optional["UDPProtocol"] = None):
+    def __init__(self, src: Tuple[str, UDPPort], dst: Tuple[str, UDPPort], *, handler: Optional[UDPHandler] = None, protocol: Optional["UDPProtocol"] = None):
         self.src = src
         self.dst = dst
         self.handler = handler
@@ -16,10 +19,6 @@ class UDPConnection:
 
     async def receive(self, n: int = -1) -> bytes:
         ...
-
-class UDPHandler:
-    def __init__(self, on_connection: Optional[Callable] = None):
-        self.on_connection = on_connection  # (connection: UDPConnection) -> None
 
 class UDPProtocol(asyncio.DatagramProtocol):
     def __init__(self, src: Optional[Tuple[str, UDPPort]] = None, handler: Optional[UDPHandler] = None):

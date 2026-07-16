@@ -21,7 +21,7 @@ class HTTPVersionNotSupportedError(HTTPError):
         self.code = 505
         self.message = message
 
-# HTTP: Violation
+# HTTP: Specification Violation
 class HTTPViolationError(Exception):
     """An exception that occurs when an HTTP specification violation is detected."""
 

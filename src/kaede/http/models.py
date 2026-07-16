@@ -3,14 +3,10 @@ import json
 import gzip
 import zlib
 import xxhash
-import rjsmin
-import rcssmin
 import ipaddress
 import zstandard
 import brotlicffi
-import minify_html
 from enum import Enum
-from scour import scour
 from typing import Any, Optional, Literal, List, Dict, Tuple, Union, TypeVar
 from dataclasses import dataclass, field
 from collections.abc import AsyncIterator
@@ -18,7 +14,7 @@ from collections.abc import AsyncIterator
 from ..url import URL
 from ..tcp import TCPPort
 from ..udp import UDPPort
-from .headers import CommaHeader, AcceptEncoding, ContentType, ETag, Cookie, SetCookie
+from .headers import CommaHeader, AcceptEncoding, ETag, Cookie, SetCookie
 
 T = TypeVar("T")
 
@@ -72,8 +68,8 @@ class HTTPPort:
             return (isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)) and self.secure
 
 class HTTPHeaderCase(Enum):
-    TITLECASE = "Title-Case" # for HTTP/1
-    LOWERCASE = "lower-case" # for HTTP/2/3
+    TITLECASE = "Title-Case" # for HTTP/1.0
+    LOWERCASE = "lower-case" # for HTTP/2.0/3.0
 
     def apply(self, name: str) -> str:
         if self == HTTPHeaderCase.TITLECASE:
@@ -114,7 +110,7 @@ class HTTPHeaders:
         ...
 
     @classmethod
-    def parse(cls, value: Union[str, bytes]) -> "HTTPHeaders":
+    def parse(cls, value: Union[str, bytes], version: HTTPVersion) -> "HTTPHeaders":
         ...
 
     def build(self) -> str:
@@ -234,52 +230,6 @@ class HTTPMessage:
                     self.body = f.read()
 
                 self.decompress()
-
-    def minify(self, *, max_offload_filesize: int = 32768):
-        if not (self.minification and not self.minified and self.body is not None):
-            return
-
-        content_type = ContentType(self.headers.get("Content-Type", ""))
-
-        if isinstance(self.body, bytes):
-            try:
-                if content_type.essence.startswith("text/html"):
-                    self.body = minify_html.minify(self.body.decode("utf-8", errors="replace"), minify_js=True, minify_css=True, keep_comments=True, keep_html_and_head_opening_tags=True).encode("utf-8")
-
-                elif content_type.essence.startswith("text/css"):
-                    self.body = rcssmin.cssmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
-
-                elif content_type.essence.startswith(("text/javascript", "application/javascript")):
-                    self.body = rjsmin.jsmin(self.body.decode("utf-8", errors="replace")).encode("utf-8")
-
-                elif content_type.essence.startswith("image/svg"):
-                    options = scour.generateDefaultOptions()
-                    options.newlines = False
-                    options.shorten_ids = True
-                    options.strip_comments = True
-
-                    self.body = scour.scourString(self.body.decode("utf-8", errors="replace"), options).encode("utf-8")
-
-                elif content_type.essence.startswith("application/json"):
-                    self.body = json.dumps(json.loads(self.body.decode())).encode()
-
-                else:
-                    return
-
-                self.minified = True
-
-            except Exception:
-                pass
-
-        elif isinstance(self.body, (str, os.PathLike)):
-            filepath = self.body
-            filesize = os.stat(filepath).st_size
-
-            if 0 < filesize <= max_offload_filesize:
-                with open(filepath, "rb") as f:
-                    self.body = f.read()
-
-                self.minify()
 
 @dataclass
 class HTTPRequest(HTTPMessage):
