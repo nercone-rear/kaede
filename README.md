@@ -28,19 +28,19 @@ Windowsへの対応は予定していません。
 標準ライブラリのラッパーとして実装します。
 
 ### SMTP
-KaedeのTLS/TCPモジュールを使用して実装します。
+KaedeのTCP/TLSモジュールを使用して実装します。
 
 ### IMAP
-KaedeのTLS/TCPモジュールを使用して実装します。
+KaedeのTCP/TLSモジュールを使用して実装します。
 
 ### POP3
-KaedeのTLS/TCPモジュールを使用して実装します。
+KaedeのTCP/TLSモジュールを使用して実装します。
 
 ### QUIC
-KaedeのTLS/UDPモジュールを使用して実装します。
+KaedeのUDP/TLSモジュールを使用して実装します。
 
 ### HTTP 1.0/1.1/2.0/3.0
-KaedeのTLS/UDS/TCP/QUICモジュールを使用して実装します。
+KaedeのTCP/QUIC/UDS/TLSモジュールを使用して実装します。
 
 ### DNS
-KaedeのTLS/TCP/UDP/HTTPモジュールを使用して実装します。
+KaedeのTCP/UDP/HTTP/TLSモジュールを使用して実装します。
