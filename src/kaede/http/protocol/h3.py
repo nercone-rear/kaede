@@ -1,2 +1,4 @@
-class H3Connection:
+from .connection import HTTPConnection
+
+class H3Connection(HTTPConnection):
     ...

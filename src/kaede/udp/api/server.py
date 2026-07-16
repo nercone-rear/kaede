@@ -1,6 +1,12 @@
 from typing import Optional, Callable, Tuple, List
+from dataclasses import dataclass
 
+from ...protocol import ServerLimits
 from ..models import UDPPort
+
+@dataclass
+class UDPServerLimits(ServerLimits):
+    pass
 
 class UDPHandler:
     def __init__(self, on_connection: Optional[Callable] = None):

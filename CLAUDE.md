@@ -112,16 +112,18 @@ kaede/
         │   │   └── server.py # HTTPサーバー    (高水準API)
         │   ├── helpers
         │   │   ├── __init__.py
-        │   │   ├── dns.py   # DNS   関連処理 (HTTPSレコード等)
-        │   │   ├── hsts.py  # HSTS  関連処理
-        │   │   ├── hpack.py # HPACK 関連処理
-        │   │   └── qpack.py # QPACK 関連処理
+        │   │   ├── dns.py         # DNS   関連処理 (HTTPSレコード等)
+        │   │   ├── hsts.py        # HSTS  関連処理
+        │   │   ├── hpack.py       # HPACK 関連処理
+        │   │   ├── qpack.py       # QPACK 関連処理
+        │   │   └── compression.py # メッセージボディ圧縮
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── h1.py      # HTTP/1.0/1.1 固有処理
-        │   │   ├── h2.py      # HTTP/2.0     固有処理
-        │   │   ├── h3.py      # HTTP/3.0     固有処理
-        │   │   └── handler.py # UDS/TCP/QUIC 接続ハンドラ
+        │   │   ├── handler.py    # UDS/TCP/QUIC 接続ハンドラ
+        │   │   ├── connection.py # HTTP         接続抽象化クラス (1/2/3 共通)
+        │   │   ├── h1.py         # HTTP/1.x     接続抽象化クラス
+        │   │   ├── h2.py         # HTTP/2.x     接続抽象化クラス
+        │   │   └── h3.py         # HTTP/3.x     接続抽象化クラス
         │   ├── __init__.py
         │   ├── errors.py    # 例外クラス
         │   ├── models.py    # 抽象化クラス

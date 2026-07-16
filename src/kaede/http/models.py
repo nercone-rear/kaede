@@ -1,11 +1,7 @@
 import os
 import json
-import gzip
-import zlib
 import xxhash
 import ipaddress
-import zstandard
-import brotlicffi
 from enum import Enum
 from typing import Any, Optional, Literal, List, Dict, Tuple, Union, TypeVar
 from dataclasses import dataclass, field
@@ -14,7 +10,8 @@ from collections.abc import AsyncIterator
 from ..url import URL
 from ..tcp import TCPPort
 from ..udp import UDPPort
-from .headers import CommaHeader, AcceptEncoding, ETag, Cookie, SetCookie
+from ..protocol import Limits
+from .headers import CommaHeader, ETag, Cookie, SetCookie
 
 T = TypeVar("T")
 
@@ -79,7 +76,10 @@ class HTTPHeaderCase(Enum):
 
     @staticmethod
     def from_version(version: HTTPVersion) -> "HTTPHeaderCase":
-        return HTTPHeaderCase.TITLECASE if version in ("HTTP/1.0", "HTTP/1.1") else HTTPHeaderCase.LOWERCASE
+        if version in ("HTTP/1.0", "HTTP/1.1"):
+            return HTTPHeaderCase.TITLECASE
+        elif version in ("HTTP/2.0", "HTTP/3.0"):
+            return HTTPHeaderCase.LOWERCASE
 
 class HTTPHeaders:
     def __init__(self, value: Union[str, bytes, List, Dict, Tuple[Tuple[str, List, Dict, Tuple[str]]]], case: Optional[HTTPHeaderCase] = None):
@@ -117,6 +117,14 @@ class HTTPHeaders:
         ...
 
 @dataclass
+class HTTPLimits(Limits):
+    max_message_size: int = 1073741824 # in bytes, The total size of the HTTP message allowed for reception.
+    max_message_offload_size: int = 98304 # in bytes, The total size of an HTTP message that can be held in memory.
+
+    max_message_body_size: int = 1073741824 # in bytes, The size of the HTTP message body allowed for reception.
+    max_message_body_offload_size: int = 65536 # in bytes, The size of the HTTP message body that can be held in memory.
+
+@dataclass
 class HTTPMessage:
     client: Tuple[Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
 
@@ -125,7 +133,7 @@ class HTTPMessage:
     headers: HTTPHeaders = field(default_factory=lambda: HTTPHeaders({}))
     trailers: Optional[HTTPHeaders] = None
 
-    body: Optional[Union[bytes, AsyncIterator[bytes], os.PathLike]] = None
+    body: Optional[Union[str, bytes, AsyncIterator[bytes]]] = None
 
     scheme: Literal["http", "https"] = "http"
     secure: bool = False
@@ -145,90 +153,17 @@ class HTTPMessage:
     def json(self) -> Any:
         return json.loads(self.text)
 
-    @property
-    def has_real_body(self) -> bool:
-        return self.body is not None and isinstance(self.body, bytes)
-
-    def compress(self, accept_encoding: str, *, max_offload_filesize: int = 32768):
-        if self.compression and not self.compressed and accept_encoding and isinstance(self.body, (bytes, str, os.PathLike)):
-            preference = ["zstd", "br", "gzip", "deflate"]
-            accept = AcceptEncoding.parse(accept_encoding)
-            acceptable = {c for c, q in accept.raw if q > 0}
-            wildcard_ok = any(c == "*" and q > 0 for c, q in accept.raw)
-
-            best = next((c for c in preference if c in acceptable or (wildcard_ok and c not in {c2 for c2, q in accept.raw if q == 0})), None)
-
-            if best is not None:
-                self.compress_with([best], max_offload_filesize=max_offload_filesize)
-
-    def compress_with(self, encodings: Optional[str] = None, *, max_offload_filesize: int = 32768):
-        if not (self.compression and not self.compressed and self.body is not None):
-            return
-
-        content_encoding = CommaHeader(self.headers.get("Content-Encoding", ""))
-
-        if isinstance(self.body, bytes):
-            for encoding in encodings:
-                if encoding == "zstd":
-                    self.body = zstandard.ZstdCompressor(level=3).compress(self.body)
-                elif encoding == "br":
-                    self.body = brotlicffi.compress(self.body, quality=4)
-                elif encoding == "gzip":
-                    self.body = gzip.compress(self.body, compresslevel=6)
-                elif encoding == "deflate":
-                    self.body = zlib.compress(self.body, level=6)
-                else:
-                    continue
-
-                content_encoding.append(encoding)
-                self.compressed = True
-
-            self.headers.set("Content-Encoding", str(content_encoding))
-
-        elif isinstance(self.body, (str, os.PathLike)):
+    def offload(self, limits: HTTPLimits) -> Optional[bytes]:
+        if isinstance(self.body, str):
             filepath = self.body
             filesize = os.stat(filepath).st_size
 
-            if 0 < filesize <= max_offload_filesize:
+            if 0 < filesize <= limits.max_message_body_offload_size:
                 with open(filepath, "rb") as f:
                     self.body = f.read()
-
-                self.compress_with(encodings, max_offload_filesize=max_offload_filesize)
-
-    def decompress(self, *, max_offload_filesize: int = 32768):
-        if not (self.compression and self.compressed and self.body is not None):
-            return
-
-        content_encoding = CommaHeader(self.headers.get("Content-Encoding", ""))
 
         if isinstance(self.body, bytes):
-            for encoding in reversed(content_encoding.raw):
-                if encoding == "zstd":
-                    self.body = zstandard.ZstdDecompressor().decompress(self.body)
-                elif encoding == "br":
-                    self.body = brotlicffi.decompress(self.body)
-                elif encoding == "gzip":
-                    self.body = gzip.decompress(self.body)
-                elif encoding == "deflate":
-                    try:
-                        self.body = zlib.decompress(self.body)
-                    except zlib.error:
-                        self.body = zlib.decompress(self.body, -zlib.MAX_WBITS)
-                else:
-                    break
-
-            self.headers.remove("Content-Encoding")
-            self.compressed = False
-
-        elif isinstance(self.body, (str, os.PathLike)):
-            filepath = self.body
-            filesize = os.stat(filepath).st_size
-
-            if 0 < filesize <= max_offload_filesize:
-                with open(filepath, "rb") as f:
-                    self.body = f.read()
-
-                self.decompress()
+            return self.body
 
 @dataclass
 class HTTPRequest(HTTPMessage):

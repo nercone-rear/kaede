@@ -1,6 +1,12 @@
 from typing import Optional, List, Tuple, Callable
+from dataclasses import dataclass
 
+from ...protocol import ServerLimits
 from ..models import TCPPort
+
+@dataclass
+class TCPServerLimits(ServerLimits):
+    pass
 
 class TCPHandler:
     def __init__(self, on_connection: Optional[Callable] = None, on_close: Optional[Callable] = None):
