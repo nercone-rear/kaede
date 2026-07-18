@@ -1,7 +1,28 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Union, List, Dict, Tuple
+from typing import Union, Literal, List, Dict, Tuple
 from dataclasses import dataclass
+
+from ..tcp import TCPPort
+from ..udp import UDPPort
+from ..http import HTTPPort
+
+@dataclass
+class DNSPort:
+    type: Literal["tcp", "udp", "quic", "https"] = "tcp"
+    value: Union[str, int, TCPPort, UDPPort, HTTPPort] = TCPPort(53)
+    secure: bool = False
+
+    @property
+    def vaild(self) -> bool:
+        if self.type == "tcp":
+            return isinstance(self.value, TCPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
+        elif self.type == "udp":
+            return isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
+        elif self.type == "quic":
+            return (isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)) and self.secure
+        elif self.type == "https":
+            return (isinstance(self.value, HTTPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)) and self.secure
 
 class DNSRecordType(Enum):
     A          = 1

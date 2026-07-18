@@ -43,4 +43,4 @@ KaedeのUDP/TLSモジュールを使用して実装します。
 KaedeのTCP/QUIC/UDS/TLSモジュールを使用して実装します。
 
 ### DNS
-KaedeのTCP/UDP/HTTP/TLSモジュールを使用して実装します。
+KaedeのTCP/UDP/QUIC/HTTP/TLSモジュールを使用して実装します。

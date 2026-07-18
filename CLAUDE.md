@@ -144,6 +144,7 @@ kaede/
             │   ├── tcp.py     # DNS over TCP   固有処理
             │   ├── udp.py     # DNS over UDP   固有処理
             │   ├── tls.py     # DNS over TLS   固有処理
+            │   ├── quic.py    # DNS over QUIC  固有処理
             │   ├── https.py   # DNS over HTTPS 固有処理
             │   └── handler.py # TCP/UDP/HTTP   接続ハンドラ
             ├── __init__.py

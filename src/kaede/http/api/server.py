@@ -13,7 +13,7 @@ class HTTPServerLimits(ServerLimits, HTTPLimits):
 class HTTPServerConfig:
     protocols: List[Union[HTTPVersion, Literal["WebSocket"]]] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0", "WebSocket"]
 
-    limits: HTTPServerLimits = field(lambda: HTTPServerLimits())
+    limits: HTTPServerLimits = field(default_factory=lambda: HTTPServerLimits())
 
     tls: Union[TLSConfig, Dict[str, TLSConfig]] = field(default_factory=lambda: TLSConfig()) # TLSConfig or {hostname: TLSConfig, ...}
 

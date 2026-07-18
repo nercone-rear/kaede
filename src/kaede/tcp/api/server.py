@@ -1,5 +1,5 @@
 from typing import Optional, List, Tuple, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ...protocol import ServerLimits
 from ..models import TCPPort
@@ -8,17 +8,20 @@ from ..models import TCPPort
 class TCPServerLimits(ServerLimits):
     pass
 
+@dataclass
+class TCPServerConfig:
+    limits: TCPServerLimits = field(default_factory=lambda: TCPServerLimits())
+
 class TCPHandler:
-    def __init__(self, on_connection: Optional[Callable] = None, on_close: Optional[Callable] = None):
+    def __init__(self, on_connection: Optional[Callable] = None):
         self.on_connection = on_connection  # (connection: TCPConnection) -> None
-        self.on_close = on_close            # (connection: TCPConnection) -> None
 
 class TCPServer:
-    def __init__(self):
-        pass
+    def __init__(self, config: Optional[TCPServerConfig] = None):
+        self.config = config or TCPServerConfig()
 
-    def run(self, handler: TCPHandler, workers: int = 4, ports: List[Tuple[str, TCPPort]] = [("0.0.0.0", 8080)]):
+    def run(self, handler: TCPHandler, workers: int = 4, ports: List[Tuple[str, TCPPort]] = []):
         ...
 
-    async def serve(self, handler: TCPHandler, ports: List[Tuple[str, TCPPort]] = [("0.0.0.0", 8080)]):
+    async def serve(self, handler: TCPHandler, workers: int = 4, ports: List[Tuple[str, TCPPort]] = []):
         ...
