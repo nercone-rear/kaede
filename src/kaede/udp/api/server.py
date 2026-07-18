@@ -27,8 +27,8 @@ class UDPServerConfig:
 
     idle_timeout: float = 30.0
 
-    tls: Optional[TLSConfig] = None    # when set, accepted connections are wrapped in DTLS.
-    alpn: Optional[List[str]] = None   # the ALPN protocols to accept, most preferred first.
+    tls: Optional[TLSConfig] = None
+    alpn: Optional[List[str]] = None
 
     cookies: bool = True
 

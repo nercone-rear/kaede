@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .api.server import UDPHandler
 
 class UDPConnection:
-    queue_limit = 256 # the number of received datagrams to hold before further arrivals are dropped.
+    queue_limit = 256
 
     def __init__(self, src: Tuple[str, UDPPort], dst: Tuple[str, UDPPort], *, handler: Optional["UDPHandler"] = None, protocol: Optional["UDPProtocol"] = None):
         self.src = src

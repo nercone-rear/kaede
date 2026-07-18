@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from .api.server import TCPHandler
 
 class TCPConnection:
-    buffer_limit = 65536 # in bytes, the amount of received data to buffer before the peer is paused.
+    buffer_limit = 65536
 
     def __init__(self, src: Tuple[str, TCPPort], dst: Tuple[str, TCPPort], *, handler: Optional["TCPHandler"] = None, protocol: Optional["TCPProtocol"] = None):
         self.src = src
@@ -19,19 +19,19 @@ class TCPConnection:
         self.transport: Optional[asyncio.Transport] = None
 
         self.buffer = bytearray()
-        self.need = 0 # the number of bytes the current receiver is waiting for.
+        self.need = 0
 
-        self.eof = False      # the peer has sent FIN.
-        self.sent_eof = False # this side has sent FIN.
+        self.eof = False
+        self.sent_eof = False
         self.closed = False
         self.error: Optional[TCPLostError] = None
 
-        self.reading = True # whether the transport is reading.
-        self.held = False   # whether the transport is congested.
+        self.reading = True
+        self.held = False
 
-        self.reader: Optional[asyncio.Future] = None # woken when data, EOF or an error arrives.
-        self.writer: Optional[asyncio.Future] = None # woken when the transport is no longer congested.
-        self.waiter: Optional[asyncio.Future] = None # woken when the connection is fully closed.
+        self.reader: Optional[asyncio.Future] = None
+        self.writer: Optional[asyncio.Future] = None
+        self.waiter: Optional[asyncio.Future] = None
 
     async def connect(self, timeout: Optional[float] = None):
         if self.transport is not None:

@@ -3,8 +3,8 @@ import importlib
 import pytest
 
 # Modules that carry an implementation must be importable. Protocols that are
-# still unimplemented (quic, and the http/dns layers that depend on it) are
-# intentionally absent from this list.
+# still unimplemented (the parts of quic still being built, and the http/dns
+# layers that depend on it) are intentionally absent from this list.
 MODULES = [
     "kaede",
     "kaede.ip",
@@ -34,11 +34,20 @@ MODULES = [
     "kaede.uds.protocol",
     "kaede.uds.api.client",
     "kaede.uds.api.server",
+    "kaede.quic.models",
+    "kaede.quic.errors",
+    "kaede.quic.tls",
+    "kaede.quic.protocol",
+    "kaede.quic",
+    "kaede.quic.api.client",
+    "kaede.quic.api.server",
     "kaede.http",
     "kaede.http.models",
     "kaede.http.headers",
     "kaede.http.errors",
     "kaede.http.responses",
+    "kaede.http.protocol.connection",
+    "kaede.http.protocol.handler",
 ]
 
 @pytest.mark.parametrize("name", MODULES)

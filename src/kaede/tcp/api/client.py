@@ -11,9 +11,9 @@ from ..tls import TLSConnection
 class TCPClientConfig:
     connect_timeout: Optional[float] = 30.0
 
-    tls: Optional[TLSConfig] = None       # when set, connections are wrapped in TLS.
-    alpn: Optional[List[str]] = None      # the ALPN protocols to offer.
-    hostname: Optional[str] = None        # the name to verify and send as SNI, when it differs from the address.
+    tls: Optional[TLSConfig] = None
+    alpn: Optional[List[str]] = None
+    hostname: Optional[str] = None
 
 class TCPClient:
     def __init__(self, dst: Tuple[str, TCPPort], src: Optional[TCPPort] = None, *, config: Optional[TCPClientConfig] = None):

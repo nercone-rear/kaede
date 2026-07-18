@@ -12,9 +12,9 @@ class UDPClientConfig:
     connect_timeout: Optional[float] = 30.0
     receive_timeout: Optional[float] = 30.0
 
-    tls: Optional[TLSConfig] = None       # when set, connections are wrapped in DTLS.
-    alpn: Optional[List[str]] = None      # the ALPN protocols to offer.
-    hostname: Optional[str] = None        # the name to verify and send as SNI, when it differs from the address.
+    tls: Optional[TLSConfig] = None
+    alpn: Optional[List[str]] = None
+    hostname: Optional[str] = None
 
 class UDPClient:
     def __init__(self, dst: Tuple[str, UDPPort], src: Optional[UDPPort] = None, *, config: Optional[UDPClientConfig] = None):

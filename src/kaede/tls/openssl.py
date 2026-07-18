@@ -137,7 +137,7 @@ class ALPN:
         return names
 
 class Cookies:
-    lifetime = 60.0 # seconds a cookie stays acceptable
+    lifetime = 60.0
 
     def __init__(self, secret: Optional[bytes] = None):
         self.secret = secret or os.urandom(32)
@@ -582,9 +582,6 @@ class TLSContext:
         return TLSSession(self, hostname=hostname)
 
     def memory(self):
-        """The BIO method backing a session, which DTLS needs to be datagram
-        shaped so that record boundaries survive."""
-
         return self.library.bio_dgram() if self.datagram else self.library.bio_memory()
 
     def free(self):

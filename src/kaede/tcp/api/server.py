@@ -24,8 +24,8 @@ class TCPServerLimits(ServerLimits):
 class TCPServerConfig:
     limits: TCPServerLimits = field(default_factory=lambda: TCPServerLimits())
 
-    tls: Optional[TLSConfig] = None    # when set, accepted connections are wrapped in TLS.
-    alpn: Optional[List[str]] = None   # the ALPN protocols to accept, most preferred first.
+    tls: Optional[TLSConfig] = None
+    alpn: Optional[List[str]] = None
 
     handshake_timeout: Optional[float] = 30.0
 
