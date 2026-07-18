@@ -83,38 +83,38 @@ class HTTPHeaderCase(Enum):
 
 class HTTPHeaders:
     def __init__(self, value: Union[str, bytes, List, Dict, Tuple[Tuple[str, List, Dict, Tuple[str]]]], case: Optional[HTTPHeaderCase] = None):
-        ...
+        raise NotImplementedError()
 
     def __getitem__(self, key: str) -> Optional[List[str]]:
-        ...
+        raise NotImplementedError()
 
     def __setitem__(self, key: str, value: Union[str, List, Dict, Tuple[str]]):
-        ...
+        raise NotImplementedError()
 
     def __contains__(self, item: str):
-        ...
+        raise NotImplementedError()
 
     def items(self) -> List[Tuple[str, str]]:
-        ...
+        raise NotImplementedError()
 
     def get(self, key: str, default: Optional[T] = None) -> Optional[Union[str, T]]:
-        ...
+        raise NotImplementedError()
 
     def set(self, key: str, value: Union[str, List, Dict, Tuple[str]], override: bool = True):
-        ...
+        raise NotImplementedError()
 
     def append(self, key: str, value: str):
-        ...
+        raise NotImplementedError()
 
     def remove(self, key: str):
-        ...
+        raise NotImplementedError()
 
     @classmethod
     def parse(cls, value: Union[str, bytes], version: HTTPVersion) -> "HTTPHeaders":
-        ...
+        raise NotImplementedError()
 
     def build(self) -> str:
-        ...
+        raise NotImplementedError()
 
 @dataclass
 class HTTPLimits(Limits):
@@ -126,24 +126,19 @@ class HTTPLimits(Limits):
 
 @dataclass
 class HTTPMessage:
-    client: Tuple[Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
+    version: HTTPVersion = "HTTP/1.1"
 
-    protocol: HTTPVersion = "HTTP/1.1"
-
-    headers: HTTPHeaders = field(default_factory=lambda: HTTPHeaders({}))
+    headers: Optional[HTTPHeaders] = None
     trailers: Optional[HTTPHeaders] = None
 
     body: Optional[Union[str, bytes, AsyncIterator[bytes]]] = None
 
-    scheme: Literal["http", "https"] = "http"
     secure: bool = False
 
     early_data: bool = False
 
     compression: bool = True
-
-    compressed: bool = False
-    minified: bool = False
+    compressed:  bool = False
 
     @property
     def text(self) -> str:
@@ -167,8 +162,10 @@ class HTTPMessage:
 
 @dataclass
 class HTTPRequest(HTTPMessage):
-    method: HTTPMethod
-    target: str
+    client: Tuple[Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int] = field(default_factory=lambda: (ipaddress.IPv4Address("0.0.0.0"), 0))
+
+    method: HTTPMethod = "GET"
+    target: str = "/"
 
     url: URL = field(init=False, repr=False)
 

@@ -20,6 +20,9 @@ kaede/
         ├── url.py       # URL
         ├── constants.py # 定数 (共通)
         ├── tls
+        │   ├── helpers
+        │   │   ├── __init__.py
+        │   │   └── ech.py # ECH (Encrypted Client Hello) 関連処理
         │   ├── __init__.py
         │   ├── models.py  # 抽象化クラス
         │   ├── errors.py  # 例外クラス
@@ -49,6 +52,7 @@ kaede/
         │   │   ├── client.py # UDPクライアント (高水準API)
         │   │   └── server.py # UDPサーバー    (高水準API)
         │   ├── __init__.py
+        │   ├── tls.py      # UDP固有のDTLS関連処理
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス
         │   └── protocol.py # プロトコル
@@ -59,7 +63,10 @@ kaede/
         │   │   └── server.py # メールサーバー    (高水準API)
         │   ├── helpers
         │   │   ├── __init__.py
-        │   │   └── dns.py # DNS 関連処理 (MXレコード等)
+        │   │   ├── dns.py   # DNS   関連処理 (MXレコード等)
+        │   │   ├── spf.py   # SPF   関連処理
+        │   │   ├── dkim.py  # DKIM  関連処理
+        │   │   └── dmarc.py # DMARC 関連処理
         │   ├── __init__.py
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス
@@ -71,7 +78,7 @@ kaede/
         │   │   ├── client.py # SMTPクライアント (高水準API)
         │   │   └── server.py # SMTPサーバー    (高水準API)
         │   ├── __init__.py
-        │   ├── tls.py      # SMTP固有のTLS関連処理
+        │   ├── tls.py      # SMTP固有のTLS関連処理 (SMTPS関連処理)
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス
         │   └── protocol.py # プロトコル
@@ -81,7 +88,7 @@ kaede/
         │   │   ├── client.py # IMAPクライアント (高水準API)
         │   │   └── server.py # IMAPサーバー    (高水準API)
         │   ├── __init__.py
-        │   ├── tls.py      # IMAP固有のTLS関連処理
+        │   ├── tls.py      # IMAP固有のTLS関連処理 (IMAPS関連処理)
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス
         │   └── protocol.py # プロトコル
@@ -91,7 +98,7 @@ kaede/
         │   │   ├── client.py # POP3クライアント (高水準API)
         │   │   └── server.py # POP3サーバー    (高水準API)
         │   ├── __init__.py
-        │   ├── tls.py      # POP3固有のTLS関連処理
+        │   ├── tls.py      # POP3固有のTLS関連処理 (POP3S関連処理)
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス
         │   └── protocol.py # プロトコル

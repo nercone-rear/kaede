@@ -1,9 +1,12 @@
-from typing import Optional, Callable, Union, Literal, Tuple, List, Dict
+from typing import Optional, Union, Tuple, List, Dict
 from dataclasses import dataclass, field
 
 from ...tls import TLSConfig
 from ...protocol import ServerLimits
-from ..models import HTTPVersion, HTTPRole, HTTPPort, HTTPLimits
+from ..models import HTTPVersion, HTTPRole, HTTPPort, HTTPLimits, HTTPHeaders, HTTPHeaderCase,  HTTPResponse
+from ..protocol import HTTPState, HTTPConnection
+from ..finalizer import finalize_response
+from ..websocket import WSConnection
 
 @dataclass
 class HTTPServerLimits(ServerLimits, HTTPLimits):
@@ -11,16 +14,21 @@ class HTTPServerLimits(ServerLimits, HTTPLimits):
 
 @dataclass
 class HTTPServerConfig:
-    protocols: List[Union[HTTPVersion, Literal["WebSocket"]]] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0", "WebSocket"]
+    versions: List[HTTPVersion] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
 
     limits: HTTPServerLimits = field(default_factory=lambda: HTTPServerLimits())
 
     tls: Union[TLSConfig, Dict[str, TLSConfig]] = field(default_factory=lambda: TLSConfig()) # TLSConfig or {hostname: TLSConfig, ...}
 
 class HTTPHandler:
-    def __init__(self, on_connection: Optional[Callable] = None, on_websocket: Optional[Callable] = None):
-        self.on_connection = on_connection # (connection: HTTPConnection) -> None
-        self.on_websocket = on_websocket   # (websocket: WSConnection) -> None
+    def on_connection(self, connection: HTTPConnection):
+        connection.accept()
+        connection.wait(HTTPState.RECEIVED)
+        connection.send(finalize_response(HTTPResponse(version=connection.version, body=b"This is Default Response from Kaede.")))
+        connection.close()
+
+    def on_websocket(self, connection: WSConnection):
+        connection.close(1011, "WebSocket not configured.")
 
 class HTTPServer:
     def __init__(self, *, role: HTTPRole = HTTPRole.ORIGIN, config: Optional[HTTPServerConfig] = None):
@@ -28,7 +36,7 @@ class HTTPServer:
         self.config = config or HTTPServerConfig()
 
     def run(self, handler: HTTPHandler, workers: int = 4, ports: List[Tuple[str, HTTPPort]] = [("0.0.0.0", HTTPPort(type="tcp", value=8080, secure=False))]):
-        ...
+        raise NotImplementedError()
 
     async def serve(self, handler: HTTPHandler, ports: List[Tuple[str, HTTPPort]] = [("0.0.0.0", HTTPPort(type="tcp", value=8080, secure=False))]):
-        ...
+        raise NotImplementedError()

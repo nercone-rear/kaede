@@ -15,10 +15,10 @@ class UDPConnection:
         self.protocol = protocol
 
     async def send(self, data: bytes):
-        ...
+        raise NotImplementedError()
 
     async def receive(self, n: int = -1) -> bytes:
-        ...
+        raise NotImplementedError()
 
 class UDPProtocol(asyncio.DatagramProtocol):
     def __init__(self, src: Optional[Tuple[str, UDPPort]] = None, handler: Optional[UDPHandler] = None):

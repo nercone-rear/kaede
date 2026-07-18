@@ -97,4 +97,4 @@ class OpenSSL:
         return unique
 
     def configure(self):
-        ...
+        raise NotImplementedError()

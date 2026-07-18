@@ -39,7 +39,7 @@ KaedeのTCP/TLSモジュールを使用して実装します。
 ### QUIC
 KaedeのUDP/TLSモジュールを使用して実装します。
 
-### HTTP 1.0/1.1/2.0/3.0
+### HTTP
 KaedeのTCP/QUIC/UDS/TLSモジュールを使用して実装します。
 
 ### DNS

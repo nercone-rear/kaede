@@ -87,12 +87,12 @@ class DNSRecordClass(Enum):
 class DNSRecordData(ABC):
     @abstractmethod
     def pack(self) -> bytes:
-        ...
+        raise NotImplementedError()
 
     @classmethod
     @abstractmethod
     def unpack(cls, raw: bytes, message: bytes, offset: int) -> "DNSRecordData":
-        ...
+        raise NotImplementedError()
 
 @dataclass(frozen=True, slots=True)
 class DNSRecord:

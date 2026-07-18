@@ -21,7 +21,7 @@ class DNSServer:
         self.config = config or DNSServerConfig()
 
     def run(self, handler: DNSHandler, workers: int = 4, ports: List[Tuple[str, DNSPort]] = [("0.0.0.0", DNSPort(type="tcp", value=53, secure=False))]):
-        ...
+        raise NotImplementedError()
 
     async def serve(self, handler: DNSHandler, ports: List[Tuple[str, DNSPort]] = [("0.0.0.0", DNSPort(type="tcp", value=53, secure=False))]):
-        ...
+        raise NotImplementedError()

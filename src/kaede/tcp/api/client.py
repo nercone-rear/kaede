@@ -9,7 +9,7 @@ class TCPClient:
         self.src = src or random.randint(0, 65535)
 
     async def open(self, dst: Optional[Tuple[str, TCPPort]] = None, src: Optional[TCPPort] = None):
-        ...
+        raise NotImplementedError()
 
     async def close(self):
-        ...
+        raise NotImplementedError()

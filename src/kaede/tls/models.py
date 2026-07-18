@@ -13,6 +13,24 @@ class TLSVersion(Enum):
     def from_float(value: float) -> "TLSVersion":
         return VERSION_MAP[value]
 
+class TLSState(Enum):
+    HANDSHAKE_STARTED = "Handshake Started"
+    HANDSHAKE_ENDED   = "Handshake Ended"
+
+    SENT_CLIENT_HELLO      = "Sent Client Hello"
+    SENT_SERVER_HELLO      = "Sent Server Hello"
+    SENT_CERTIFICATE       = "Sent Certificate"
+    SENT_PRE_MASTER_SECRET = "Sent Pre-Master-Secret"
+    SENT_HASH              = "Sent Hash"
+    SENT_MASTER_SECRET     = "Sent Master-Secret"
+
+    RECEIVED_CLIENT_HELLO      = "Received Client Hello"
+    RECEIVED_SERVER_HELLO      = "Received Server Hello"
+    RECEIVED_CERTIFICATE       = "Received Certificate"
+    RECEIVED_PRE_MASTER_SECRET = "Received Pre-Master-Secret"
+    RECEIVED_HASH              = "Received Hash"
+    RECEIVED_MASTER_SECRET     = "Received Master-Secret"
+
 class TLSGroup(Enum):
     # Classic
     X25519     = "x25519"

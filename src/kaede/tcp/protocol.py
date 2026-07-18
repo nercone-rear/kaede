@@ -14,16 +14,16 @@ class TCPConnection:
         self.protocol = protocol
 
     async def connect(self):
-        ...
+        raise NotImplementedError()
 
     async def close(self, half_close: bool = False):
-        ...
+        raise NotImplementedError()
 
     async def send(self, data: bytes):
-        ...
+        raise NotImplementedError()
 
     async def receive(self, n: int = -1) -> bytes:
-        ...
+        raise NotImplementedError()
 
 class TCPProtocol(asyncio.Protocol):
     def __init__(self, src: Optional[Tuple[str, TCPPort]] = None, handler: Optional[TCPHandler] = None):

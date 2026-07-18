@@ -11,12 +11,12 @@ class URL:
     fragment: str
 
     def __str__(self) -> str:
-        ...
+        raise NotImplementedError()
 
     @property
     def params(self) -> Dict[str, List, Dict, Tuple[str]]:
-        ...
+        raise NotImplementedError()
 
     @property
     def netloc(self) -> str:
-        ...
+        raise NotImplementedError()

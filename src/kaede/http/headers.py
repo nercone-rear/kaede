@@ -36,47 +36,47 @@ class CommaHeader:
 
 class Link:
     def __init__(self, value: Union[str, List, Dict, Tuple[Tuple[str, Dict[str, str]]]]):
-        ...
+        raise NotImplementedError()
 
     @classmethod
     def parse(cls, value: str) -> "Link":
-        ...
+        raise NotImplementedError()
 
     def build(self) -> str:
-        ...
+        raise NotImplementedError()
 
 class AcceptEncoding:
     def __init__(self, value: Union[str, List, Dict, Tuple[Tuple[str, float]]]):
-        ...
+        raise NotImplementedError()
 
     @classmethod
     def parse(cls, value: str) -> "AcceptEncoding":
-        ...
+        raise NotImplementedError()
 
     def build(self) -> str:
-        ...
+        raise NotImplementedError()
 
 class ContentType:
     def __init__(self, value: str):
-        ...
+        raise NotImplementedError()
 
     @property
     def essence(self) -> str:
-        ...
+        raise NotImplementedError()
 
     @property
     def charset(self) -> str:
-        ...
+        raise NotImplementedError()
 
     @property
     def boundary(self) -> str:
-        ...
+        raise NotImplementedError()
 
     def parse(self) -> Tuple[str, str, Dict[str, str]]:
-        ...
+        raise NotImplementedError()
 
     def build(self) -> str:
-        ...
+        raise NotImplementedError()
 
 class ETag:
     def __init__(self, value: Union[str, "ETag"]):
@@ -141,10 +141,10 @@ class Cookie:
 
     @classmethod
     def parse(cls, value: str) -> "Cookie":
-        ...
+        raise NotImplementedError()
 
     def build(self) -> str:
-        ...
+        raise NotImplementedError()
 
 class SetCookie:
     def __init__(self, name: str, value: str, *, expires: Optional[str] = None, max_age: Optional[int] = None, domain: Optional[str] = None, path: Optional[str] = None, secure: bool = False, httponly: bool = False, samesite: Optional[Literal["Strict", "Lax", "None"]] = None):
@@ -163,7 +163,7 @@ class SetCookie:
 
     @classmethod
     def parse(self, value: str) -> "SetCookie":
-        ...
+        raise NotImplementedError()
 
     def build(self) -> str:
-        ...
+        raise NotImplementedError()

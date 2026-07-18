@@ -21,7 +21,7 @@ class TCPServer:
         self.config = config or TCPServerConfig()
 
     def run(self, handler: TCPHandler, workers: int = 4, ports: List[Tuple[str, TCPPort]] = []):
-        ...
+        raise NotImplementedError()
 
     async def serve(self, handler: TCPHandler, workers: int = 4, ports: List[Tuple[str, TCPPort]] = []):
-        ...
+        raise NotImplementedError()
