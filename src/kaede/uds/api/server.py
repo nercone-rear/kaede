@@ -101,10 +101,29 @@ class UDSServer:
         self.stopped = asyncio.Event()
 
         loop = asyncio.get_running_loop()
-        sockets = sockets or [self.bind(path) for path in paths]
 
-        for sock in sockets:
-            self.servers.append(await loop.create_unix_server(lambda: UDSServerProtocol(self, handler), sock=sock))
+        bound = sockets or [self.bind(path) for path in paths]
+        servers: List[asyncio.AbstractServer] = []
+
+        try:
+            for sock in bound:
+                servers.append(await loop.create_unix_server(lambda: UDSServerProtocol(self, handler), sock=sock))
+
+        except BaseException:
+            bound_paths = [UDSProtocol.address(sock.getsockname()) for sock in bound]
+
+            for server in servers:
+                server.close()
+
+            for sock in bound[len(servers):]:
+                sock.close()
+
+            for path in bound_paths:
+                self.unlink(path)
+
+            raise
+
+        self.servers = servers
 
     async def serve(self, handler: UDSHandler, paths: Optional[List[UDSAddress]] = None, *, sockets: Optional[List[socket.socket]] = None):
         await self.listen(handler, paths, sockets=sockets)

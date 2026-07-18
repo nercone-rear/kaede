@@ -101,6 +101,38 @@ class TestServing:
         finally:
             await server.close(timeout=2)
 
+    async def test_a_failure_partway_through_listening_leaks_nothing(self, uds_dir, monkeypatch):
+        # If create_unix_server fails for one of several paths, every socket
+        # bound so far -- attached or not -- must be closed and unlinked, and
+        # the server must be left with no partially-attached state.
+        first = UDSAddress(os.path.join(uds_dir, "a.sock"))
+        second = UDSAddress(os.path.join(uds_dir, "b.sock"))
+
+        server = UDSServer()
+        loop = asyncio.get_running_loop()
+        original = loop.create_unix_server
+        attempts = []
+
+        async def flaky(factory, *, sock, **kwargs):
+            attempts.append(sock)
+
+            if len(attempts) == 2:
+                raise RuntimeError("boom")
+
+            return await original(factory, sock=sock, **kwargs)
+
+        monkeypatch.setattr(loop, "create_unix_server", flaky)
+
+        with pytest.raises(RuntimeError):
+            await server.listen(UDSHandler(upper), [first, second])
+
+        assert server.servers == []
+        assert not os.path.exists(str(first))
+        assert not os.path.exists(str(second))
+
+        for sock in attempts:
+            assert sock.fileno() == -1
+
     async def test_rejects_listening_without_any_path(self):
         server = UDSServer()
 

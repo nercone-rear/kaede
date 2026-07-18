@@ -288,6 +288,8 @@ class TestHalfClose:
             with pytest.raises(UDSClosedError):
                 await uds.send(b"late")
 
+            await uds.close()
+
 class TestErrors:
     async def test_connecting_to_a_missing_path_is_refused(self, socket_path):
         uds = UDSConnection(UDSAddress(""), socket_path)  # nothing is listening there
