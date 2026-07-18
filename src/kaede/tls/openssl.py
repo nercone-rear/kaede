@@ -1,7 +1,10 @@
 import os
 import sys
 import glob
+import time
+import hmac
 import ctypes
+import hashlib
 import ctypes.util
 from ssl import CERT_NONE, CERT_REQUIRED
 from typing import Optional, List, Dict
@@ -22,10 +25,18 @@ class Control:
 
     NAMETYPE_HOST = 0
 
+    DTLS_GET_TIMEOUT      = 73
+    DTLS_HANDLE_TIMEOUT   = 74
+    DTLS_SET_LINK_MTU     = 120
+    DTLS_GET_LINK_MIN_MTU = 121
+    SET_MTU               = 17
+
 class Option:
     NO_COMPRESSION           = 0x00020000
     CIPHER_SERVER_PREFERENCE = 0x00400000
     NO_RENEGOTIATION         = 0x40000000
+
+    NO_QUERY_MTU             = 0x00001000
 
 class Verify:
     NONE = 0
@@ -58,9 +69,28 @@ class Protocol:
         TLSVersion.TLSv1_3: 0x0304
     }
 
+    DATAGRAM_NUMBERS: Dict[TLSVersion, int] = {
+        TLSVersion.TLSv1_0: 0xFEFF,
+        TLSVersion.TLSv1_1: 0xFEFF,
+        TLSVersion.TLSv1_2: 0xFEFD
+    }
+
     @staticmethod
-    def number(version: TLSVersion) -> int:
-        return Protocol.NUMBERS[version]
+    def number(version: TLSVersion, datagram: bool = False) -> int:
+        if not datagram:
+            return Protocol.NUMBERS[version]
+
+        if version not in Protocol.DATAGRAM_NUMBERS:
+            raise TLSConfigError(f"DTLS has no counterpart to {version.value}. OpenSSL 3.6 and 4.0 support DTLS up to 1.2, so ask for TLS 1.2 or lower over a datagram transport.")
+
+        return Protocol.DATAGRAM_NUMBERS[version]
+
+class Timeval(ctypes.Structure):
+    _fields_ = [("sec", ctypes.c_long), ("usec", ctypes.c_int if sys.platform.startswith("darwin") else ctypes.c_long)]
+
+    @property
+    def seconds(self) -> float:
+        return self.sec + self.usec / 1000000.0
 
 class Certificate:
     REASONS: Dict[int, str] = {
@@ -105,6 +135,26 @@ class ALPN:
             offset += 1 + length
 
         return names
+
+class Cookies:
+    lifetime = 60.0 # seconds a cookie stays acceptable
+
+    def __init__(self, secret: Optional[bytes] = None):
+        self.secret = secret or os.urandom(32)
+        self.peer = ""
+
+    def epoch(self, at: Optional[float] = None) -> int:
+        return int((time.monotonic() if at is None else at) / self.lifetime)
+
+    def sign(self, peer: str, epoch: int) -> bytes:
+        return hmac.new(self.secret, f"{peer}|{epoch}".encode(), hashlib.sha256).digest()
+
+    def make(self, peer: str, at: Optional[float] = None) -> bytes:
+        return self.sign(peer, self.epoch(at))
+
+    def check(self, peer: str, cookie: bytes, at: Optional[float] = None) -> bool:
+        epoch = self.epoch(at)
+        return any(hmac.compare_digest(cookie, self.sign(peer, window)) for window in (epoch, epoch - 1))
 
 class OpenSSL:
     minimum_version = 0x30600000 # OpenSSL 3.6.0
@@ -235,6 +285,9 @@ class OpenSSL:
 
         # Memory BIO
         self.bio_memory  = self.bind(self.crypto, "BIO_s_mem", VOID_P, [])
+
+        # Memory BIO (DTLS)
+        self.bio_dgram   = self.bind(self.crypto, "BIO_s_dgram_mem", VOID_P, [])
         self.bio_new     = self.bind(self.crypto, "BIO_new", VOID_P, [VOID_P])
         self.bio_free    = self.bind(self.crypto, "BIO_free", INT, [VOID_P])
         self.bio_write   = self.bind(self.crypto, "BIO_write", INT, [VOID_P, STR, INT])
@@ -249,6 +302,11 @@ class OpenSSL:
         self.method        = self.bind(self.ssl, "TLS_method", VOID_P, [])
         self.method_client = self.bind(self.ssl, "TLS_client_method", VOID_P, [])
         self.method_server = self.bind(self.ssl, "TLS_server_method", VOID_P, [])
+
+        # Methods (DTLS)
+        self.method_datagram        = self.bind(self.ssl, "DTLS_method", VOID_P, [])
+        self.method_datagram_client = self.bind(self.ssl, "DTLS_client_method", VOID_P, [])
+        self.method_datagram_server = self.bind(self.ssl, "DTLS_server_method", VOID_P, [])
 
         # Context
         self.context_new          = self.bind(self.ssl, "SSL_CTX_new", VOID_P, [VOID_P])
@@ -268,6 +326,14 @@ class OpenSSL:
         self.context_alpn         = self.bind(self.ssl, "SSL_CTX_set_alpn_protos", INT, [VOID_P, UCHAR_P, UINT])
         self.context_alpn_select  = self.bind(self.ssl, "SSL_CTX_set_alpn_select_cb", VOID, [VOID_P, VOID_P, VOID_P])
 
+        # DTLS cookie exchange
+        self.context_cookie_generate = self.bind(self.ssl, "SSL_CTX_set_cookie_generate_cb", VOID, [VOID_P, VOID_P])
+        self.context_cookie_verify   = self.bind(self.ssl, "SSL_CTX_set_cookie_verify_cb", VOID, [VOID_P, VOID_P])
+        self.listen                  = self.bind(self.ssl, "DTLSv1_listen", INT, [VOID_P, VOID_P])
+
+        self.address_new  = self.bind(self.crypto, "BIO_ADDR_new", VOID_P, [])
+        self.address_free = self.bind(self.crypto, "BIO_ADDR_free", VOID, [VOID_P])
+
         # Session
         self.new           = self.bind(self.ssl, "SSL_new", VOID_P, [VOID_P])
         self.free          = self.bind(self.ssl, "SSL_free", VOID, [VOID_P])
@@ -282,6 +348,9 @@ class OpenSSL:
         self.write         = self.bind(self.ssl, "SSL_write", INT, [VOID_P, STR, INT])
         self.shutdown      = self.bind(self.ssl, "SSL_shutdown", INT, [VOID_P])
         self.get_error     = self.bind(self.ssl, "SSL_get_error", INT, [VOID_P, INT])
+
+        # Session (DTLS)
+        self.data_mtu      = self.bind(self.ssl, "DTLS_get_data_mtu", SIZE, [VOID_P])
 
         # Session information
         self.get_version     = self.bind(self.ssl, "SSL_get_version", STR, [VOID_P])
@@ -311,10 +380,12 @@ class OpenSSL:
         return "; ".join(self.drain()) or default
 
 class TLSContext:
-    def __init__(self, config: Optional[TLSConfig] = None, *, server: bool = False, alpn: Optional[List[str]] = None, library: Optional[OpenSSL] = None):
+    def __init__(self, config: Optional[TLSConfig] = None, *, server: bool = False, alpn: Optional[List[str]] = None, datagram: bool = False, cookies: Optional[Cookies] = None, library: Optional[OpenSSL] = None):
         self.config = config or TLSConfig()
         self.server = server
         self.alpn = alpn
+        self.datagram = datagram
+        self.cookies = cookies
         self.library = library or OpenSSL()
 
         self.pointer = None
@@ -322,23 +393,66 @@ class TLSContext:
 
         self.build()
 
+    def method(self):
+        library = self.library
+
+        if self.datagram:
+            return library.method_datagram_server() if self.server else library.method_datagram_client()
+
+        return library.method_server() if self.server else library.method_client()
+
     def build(self):
         library = self.library
         library.error_clear()
 
-        self.pointer = library.context_new(library.method_server() if self.server else library.method_client())
+        self.pointer = library.context_new(self.method())
 
         if not self.pointer:
-            raise TLSConfigError(f"Could not create the TLS context: {library.reason()}")
+            raise TLSConfigError(f"Could not create the {'DTLS' if self.datagram else 'TLS'} context: {library.reason()}")
 
-        library.context_ctrl(self.pointer, Control.SET_MIN_PROTO_VERSION, Protocol.number(self.config.minimum_version), None)
-        library.context_options(self.pointer, Option.NO_COMPRESSION | Option.NO_RENEGOTIATION)
+        library.context_ctrl(self.pointer, Control.SET_MIN_PROTO_VERSION, Protocol.number(self.config.minimum_version, self.datagram), None)
+
+        options = Option.NO_COMPRESSION | Option.NO_RENEGOTIATION
+
+        if self.datagram:
+            options |= Option.NO_QUERY_MTU
+
+        library.context_options(self.pointer, options)
 
         self.apply_groups()
         self.apply_ciphers()
         self.apply_verification()
         self.apply_credentials()
         self.apply_alpn()
+        self.apply_cookies()
+
+    def apply_cookies(self):
+        if self.cookies is None:
+            return
+
+        if not self.datagram or not self.server:
+            raise TLSConfigError("Cookies belong to a DTLS server: they are how it makes a peer prove its address before it is served.")
+
+        generating = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_uint))
+        verifying  = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_uint)
+        cookies = self.cookies
+
+        def issue(session, cookie, length):
+            value = cookies.make(cookies.peer)
+
+            ctypes.memmove(cookie, value, len(value))
+            length[0] = len(value)
+
+            return 1
+
+        def confirm(session, cookie, length):
+            return 1 if cookies.check(cookies.peer, bytes(bytearray(cookie[:length]))) else 0
+
+        issuing, confirming = generating(issue), verifying(confirm)
+        self.callbacks.extend((issuing, confirming))
+
+        self.library.context_cookie_generate(self.pointer, ctypes.cast(issuing, VOID_P))
+        self.library.context_cookie_verify(self.pointer, ctypes.cast(confirming, VOID_P))
 
     def apply_groups(self):
         groups = ":".join(group.value for group in self.config.groups)
@@ -355,6 +469,15 @@ class TLSContext:
 
         if not suites and not ciphers:
             raise TLSConfigError("At least one cipher has to be configured.")
+
+        if self.datagram:
+            if not ciphers:
+                raise TLSConfigError("Only TLS 1.3 cipher suites are configured, but DTLS 1.2 cannot use them. At least one TLS 1.2 cipher has to be configured for a datagram transport.")
+
+            if self.library.context_ciphers(self.pointer, ciphers.encode()) != 1:
+                raise TLSConfigError(f"OpenSSL rejected the cipher list {ciphers!r}: {self.library.reason()}")
+
+            return
 
         if not suites and self.config.minimum_version == TLSVersion.TLSv1_3:
             raise TLSConfigError("The minimum version is TLS 1.3, but no TLS 1.3 cipher suite is configured.")
@@ -458,6 +581,12 @@ class TLSContext:
     def session(self, *, hostname: Optional[str] = None) -> "TLSSession":
         return TLSSession(self, hostname=hostname)
 
+    def memory(self):
+        """The BIO method backing a session, which DTLS needs to be datagram
+        shaped so that record boundaries survive."""
+
+        return self.library.bio_dgram() if self.datagram else self.library.bio_memory()
+
     def free(self):
         if self.pointer:
             self.library.context_free(self.pointer)
@@ -467,23 +596,29 @@ class TLSContext:
         self.free()
 
 class TLSSession:
+    link_mtu = 1280
+
     def __init__(self, context: TLSContext, *, hostname: Optional[str] = None):
         self.context = context
         self.library = context.library
         self.server = context.server
+        self.datagram = context.datagram
         self.hostname = hostname
 
         self.established = False
         self.closed = False
+
+        self.address = None
 
         self.pointer = self.library.new(context.pointer)
 
         if not self.pointer:
             raise TLSHandshakeError(f"Could not create the TLS session: {self.library.reason()}")
 
-        self.incoming = self.library.bio_new(self.library.bio_memory())
-        self.outgoing = self.library.bio_new(self.library.bio_memory())
+        self.incoming = self.library.bio_new(context.memory())
+        self.outgoing = self.library.bio_new(context.memory())
         self.library.set_bio(self.pointer, self.incoming, self.outgoing)
+        self.mtu(TLSSession.link_mtu)
 
         if self.server:
             self.library.accept_state(self.pointer)
@@ -510,22 +645,64 @@ class TLSSession:
         if written != len(data):
             raise TLSProtocolError(f"Only {written} of {len(data)} bytes could be buffered: {self.library.reason()}")
 
-    def drain(self) -> bytes:
+    def packets(self) -> List[bytes]:
         chunks: List[bytes] = []
 
         while True:
             pending = self.library.bio_pending(self.outgoing)
 
             if not pending:
-                return b"".join(chunks)
+                return chunks
 
             buffer = ctypes.create_string_buffer(pending)
             read = self.library.bio_read(self.outgoing, buffer, pending)
 
             if read <= 0:
-                return b"".join(chunks)
+                return chunks
 
             chunks.append(buffer.raw[:read])
+
+    def drain(self) -> bytes:
+        return b"".join(self.packets())
+
+    def timeout(self) -> Optional[float]:
+        if not self.datagram:
+            return None
+
+        remaining = Timeval()
+
+        if self.library.ctrl(self.pointer, Control.DTLS_GET_TIMEOUT, 0, ctypes.byref(remaining)) != 1:
+            return None
+
+        return max(0.0, remaining.seconds)
+
+    def expire(self) -> bool:
+        if not self.datagram:
+            return False
+
+        return self.library.ctrl(self.pointer, Control.DTLS_HANDLE_TIMEOUT, 0, None) > 0
+
+    def mtu(self, value: int):
+        if self.datagram:
+            self.library.ctrl(self.pointer, Control.DTLS_SET_LINK_MTU, value, None)
+
+    def limit(self) -> Optional[int]:
+        if not self.datagram or not self.established:
+            return None
+
+        return self.library.data_mtu(self.pointer) or None
+
+    def listen(self, peer: str) -> bool:
+        if not self.datagram or self.context.cookies is None:
+            return True
+
+        if self.address is None:
+            self.address = self.library.address_new()
+
+        self.context.cookies.peer = peer
+        self.library.error_clear()
+
+        return self.library.listen(self.pointer, self.address) > 0
 
     def handshake(self) -> bool:
         if self.established:
@@ -655,6 +832,10 @@ class TLSSession:
         if self.pointer:
             self.library.free(self.pointer)
             self.pointer = None
+
+        if self.address:
+            self.library.address_free(self.address)
+            self.address = None
 
     def __del__(self):
         self.free()
