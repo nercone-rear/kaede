@@ -3,8 +3,8 @@ import importlib
 import pytest
 
 # Modules that carry an implementation must be importable. Protocols that are
-# still unimplemented (uds, quic, and the http/dns layers that depend on them)
-# are intentionally absent from this list.
+# still unimplemented (quic, and the http/dns layers that depend on it) are
+# intentionally absent from this list.
 MODULES = [
     "kaede",
     "kaede.ip",
@@ -25,6 +25,12 @@ MODULES = [
     "kaede.udp.models",
     "kaede.udp.protocol",
     "kaede.udp.api.server",
+    "kaede.uds",
+    "kaede.uds.models",
+    "kaede.uds.errors",
+    "kaede.uds.protocol",
+    "kaede.uds.api.client",
+    "kaede.uds.api.server",
     "kaede.http",
     "kaede.http.models",
     "kaede.http.headers",
