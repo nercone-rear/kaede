@@ -23,5 +23,5 @@ class TCPServer:
     def run(self, handler: TCPHandler, workers: int = 4, ports: List[Tuple[str, TCPPort]] = []):
         raise NotImplementedError()
 
-    async def serve(self, handler: TCPHandler, workers: int = 4, ports: List[Tuple[str, TCPPort]] = []):
+    async def serve(self, handler: TCPHandler, ports: List[Tuple[str, TCPPort]] = []):
         raise NotImplementedError()

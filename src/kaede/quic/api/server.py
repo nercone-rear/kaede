@@ -23,5 +23,5 @@ class QUICServer:
     def run(self, handler: QUICHandler, workers: int = 4, ports: List[Tuple[str, UDPPort]] = []):
         raise NotImplementedError()
 
-    async def serve(self, handler: QUICHandler, workers: int = 4, ports: List[Tuple[str, UDPPort]] = []):
+    async def serve(self, handler: QUICHandler, ports: List[Tuple[str, UDPPort]] = []):
         raise NotImplementedError()

@@ -23,5 +23,5 @@ class UDPServer:
     def run(self, handler: UDPHandler, workers: int = 4, ports: List[Tuple[str, UDPPort]] = []):
         raise NotImplementedError()
 
-    async def serve(self, handler: UDPHandler, workers: int = 4, ports: List[Tuple[str, UDPPort]] = []):
+    async def serve(self, handler: UDPHandler, ports: List[Tuple[str, UDPPort]] = []):
         raise NotImplementedError()
