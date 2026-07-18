@@ -11,6 +11,7 @@ from ..url import URL
 from ..tcp import TCPPort
 from ..udp import UDPPort
 from ..protocol import Limits
+from ..constants import Characters
 from .headers import CommaHeader, ETag, Cookie, SetCookie
 
 T = TypeVar("T")
@@ -82,47 +83,137 @@ class HTTPHeaderCase(Enum):
             return HTTPHeaderCase.LOWERCASE
 
 class HTTPHeaders:
-    def __init__(self, value: Union[str, bytes, List, Dict, Tuple[Tuple[str, List, Dict, Tuple[str]]]], case: Optional[HTTPHeaderCase] = None):
-        raise NotImplementedError()
+    TOKEN = frozenset("!#$%&'*+-.^_`|~") | Characters.DIGIT | Characters.LOWER | Characters.UPPER
+
+    def __init__(self, value: Union[str, bytes, "HTTPHeaders", List, Dict, Tuple] = (), case: Optional[HTTPHeaderCase] = None):
+        self.case = case
+        self.fields: List[Tuple[str, str]] = []
+
+        if isinstance(value, (str, bytes)):
+            self.fields = HTTPHeaders.parse(value, "HTTP/1.1").fields
+        elif isinstance(value, HTTPHeaders):
+            self.fields = list(value.fields)
+        elif isinstance(value, dict):
+            for name, entry in value.items():
+                self.set(name, entry)
+        else:
+            for name, entry in value:
+                self.append(name, entry)
 
     def __getitem__(self, key: str) -> Optional[List[str]]:
-        raise NotImplementedError()
+        found = [value for name, value in self.fields if name.lower() == key.lower()]
+
+        return found or None
 
     def __setitem__(self, key: str, value: Union[str, List, Dict, Tuple[str]]):
-        raise NotImplementedError()
+        self.set(key, value)
 
-    def __contains__(self, item: str):
-        raise NotImplementedError()
+    def __contains__(self, item: str) -> bool:
+        return any(name.lower() == item.lower() for name, _ in self.fields)
+
+    def __iter__(self):
+        return iter(self.fields)
+
+    def __len__(self) -> int:
+        return len(self.fields)
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, HTTPHeaders) and self.fields == other.fields
+
+    def __repr__(self) -> str:
+        return f"HTTPHeaders({self.fields!r})"
 
     def items(self) -> List[Tuple[str, str]]:
-        raise NotImplementedError()
+        return list(self.fields)
 
     def get(self, key: str, default: Optional[T] = None) -> Optional[Union[str, T]]:
-        raise NotImplementedError()
+        for name, value in self.fields:
+            if name.lower() == key.lower():
+                return value
+
+        return default
+
+    def values(self, key: str) -> List[str]:
+        return [value for name, value in self.fields if name.lower() == key.lower()]
 
     def set(self, key: str, value: Union[str, List, Dict, Tuple[str]], override: bool = True):
-        raise NotImplementedError()
+        if not override and key in self:
+            return
+
+        entries = value if isinstance(value, (list, tuple)) else [value]
+
+        self.remove(key)
+
+        for entry in entries:
+            self.append(key, entry)
 
     def append(self, key: str, value: str):
-        raise NotImplementedError()
+        self.fields.append((HTTPHeaders.token(key), HTTPHeaders.clean(key, value)))
 
     def remove(self, key: str):
-        raise NotImplementedError()
+        self.fields = [(name, value) for name, value in self.fields if name.lower() != key.lower()]
+
+    @staticmethod
+    def token(name: str) -> str:
+        if not name or any(character not in HTTPHeaders.TOKEN for character in name):
+            raise ValueError(f"{name!r} is not a valid header field name.")
+
+        return name
+
+    @staticmethod
+    def clean(name: str, value: str) -> str:
+        text = value if isinstance(value, str) else str(value)
+        text = text.strip(" \t")
+
+        for character in text:
+            point = ord(character)
+
+            if point == 0x7F or (point < 0x20 and character not in "\t"):
+                raise ValueError(f"The value of the {name!r} header carries the control character {point:#04x}.")
+
+        return text
 
     @classmethod
     def parse(cls, value: Union[str, bytes], version: HTTPVersion) -> "HTTPHeaders":
-        raise NotImplementedError()
+        text = value.decode("latin-1") if isinstance(value, (bytes, bytearray)) else value
+        headers = cls(case=HTTPHeaderCase.from_version(version))
+
+        for line in text.split("\r\n"):
+            if not line:
+                continue
+
+            if line[0] in " \t":
+                raise ValueError("A header field uses obsolete line folding.")
+
+            name, colon, entry = line.partition(":")
+
+            if not colon:
+                raise ValueError(f"The header line {line!r} has no colon.")
+
+            if name != name.rstrip():
+                raise ValueError(f"The header field {name!r} has whitespace before its colon.")
+
+            headers.append(name, entry.strip(" \t"))
+
+        return headers
 
     def build(self) -> str:
-        raise NotImplementedError()
+        case = self.case or HTTPHeaderCase.TITLECASE
+
+        return "".join(f"{case.apply(name)}: {value}\r\n" for name, value in self.fields)
 
 @dataclass
 class HTTPLimits(Limits):
-    max_message_size: int = 1073741824 # in bytes, The total size of the HTTP message allowed for reception.
+    max_message_size: int = 1073741824    # in bytes, The total size of the HTTP message allowed for reception.
     max_message_offload_size: int = 98304 # in bytes, The total size of an HTTP message that can be held in memory.
 
-    max_message_body_size: int = 1073741824 # in bytes, The size of the HTTP message body allowed for reception.
+    max_message_body_size: int = 1073741824    # in bytes, The size of the HTTP message body allowed for reception.
     max_message_body_offload_size: int = 65536 # in bytes, The size of the HTTP message body that can be held in memory.
+
+    max_startline_size: int = 8192  # in bytes, the request/status line ceiling
+    max_headers_size:   int = 65536 # in bytes, the whole header (or trailer) block
+    max_header_count:   int = 128   # the number of header fields allowed in one block
+    max_chunk_ext_size: int = 4096  # in bytes, one chunk size line with its extensions
 
 @dataclass
 class HTTPMessage:
@@ -142,7 +233,10 @@ class HTTPMessage:
 
     @property
     def text(self) -> str:
-        return self.body.decode()
+        if isinstance(self.body, bytes):
+            return self.body.decode()
+
+        return self.body if isinstance(self.body, str) else ""
 
     @property
     def json(self) -> Any:
@@ -170,8 +264,15 @@ class HTTPRequest(HTTPMessage):
     url: URL = field(init=False, repr=False)
 
     def __post_init__(self):
+        if self.headers is None:
+            self.headers = HTTPHeaders()
+
         authority = self.headers.get("Host", "")
         self.url = URL.from_target(self.target, self.scheme, authority)
+
+    @property
+    def scheme(self) -> str:
+        return "https" if self.secure else "http"
 
     @property
     def cookies(self) -> Cookie:

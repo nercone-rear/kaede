@@ -100,7 +100,11 @@ class QUICRelay:
 
     @staticmethod
     def prepare(workers: int) -> Tuple[str, List[str], List[socket.socket]]:
-        directory = tempfile.mkdtemp(prefix="kaede-quic-", dir="/tmp")
+        directory = tempfile.mkdtemp(prefix="kaede-quic-")
+
+        if len(os.path.join(directory, str(workers))) > 100:
+            shutil.rmtree(directory, ignore_errors=True)
+            directory = tempfile.mkdtemp(prefix="kaede-quic-", dir="/tmp")
 
         paths: List[str] = []
         sockets: List[socket.socket] = []

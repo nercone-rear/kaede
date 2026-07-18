@@ -19,7 +19,7 @@ def compress(message: HTTPMessage, accept_encoding: str, *, preference: List[str
     best = next((c for c in preference if c in acceptable or (wildcard_ok and c not in {c2 for c2, q in accept.raw if q == 0})), None)
 
     if best is not None:
-        compress_with(message, [best], limit=limits)
+        compress_with(message, [best], limits=limits)
 
 def compress_with(message: HTTPMessage, encodings: Optional[List[str]] = None, *, limits: HTTPLimits):
     if not (message.compression and not message.compressed and message.body is not None):

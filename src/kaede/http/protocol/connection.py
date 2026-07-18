@@ -29,45 +29,45 @@ class HTTPConnection:
 
         self.transport = transport
 
-        self.state = state
+        self.state = state or HTTPState.CONNECTION_STARTED
         self.version = version
-        self.limits = limits
+        self.limits = limits or HTTPLimits()
 
-    def send(self, value: Union[bytes, HTTPMessage], *, final: bool = True):
+    async def send(self, value: Union[bytes, HTTPMessage], *, final: bool = True):
         if isinstance(value, bytes):
-            self.send_raw(value, final=final)
+            await self.send_raw(value, final=final)
         elif isinstance(value, HTTPMessage):
-            self.send_message(value, final=final)
+            await self.send_message(value, final=final)
 
-    def send_raw(self, data: bytes, *, final: bool = True):
+    async def send_raw(self, data: bytes, *, final: bool = True):
         raise NotImplementedError()
 
-    def send_message(self, message: HTTPMessage, *, final: bool = True):
+    async def send_message(self, message: HTTPMessage, *, final: bool = True):
         raise NotImplementedError()
 
-    def receive(self, n: int = -1, *, raw: bool = False) -> Optional[Union[bytes, HTTPMessage]]:
+    async def receive(self, n: int = -1, *, raw: bool = False) -> Optional[Union[bytes, HTTPMessage]]:
         if raw:
-            return self.receive_raw(n)
-        else:
-            return self.receive_message()
+            return await self.receive_raw(n)
 
-    def receive_raw(self, n: int = -1) -> Optional[bytes]:
+        return await self.receive_message()
+
+    async def receive_raw(self, n: int = -1) -> Optional[bytes]:
         raise NotImplementedError()
 
-    def receive_message(self) -> Optional[HTTPMessage]:
+    async def receive_message(self) -> Optional[HTTPMessage]:
         raise NotImplementedError()
 
-    def accept(self):
+    async def accept(self):
         raise NotImplementedError()
 
-    def reject(self):
+    async def reject(self):
         raise NotImplementedError()
 
-    def close(self, *, half_close: bool = False, send_pending: bool = False):
+    async def close(self, *, half_close: bool = False, send_pending: bool = False):
         raise NotImplementedError()
 
-    def reset(self):
+    async def reset(self):
         raise NotImplementedError()
 
-    def wait(self, value: Union[HTTPState]):
+    async def wait(self, value: HTTPState):
         raise NotImplementedError()

@@ -12,3 +12,5 @@ class IPVersion(Enum):
             return IPVersion.IPv4
         elif isinstance(address, ipaddress.IPv6Address):
             return IPVersion.IPv6
+
+        raise ValueError(f"{address!r} is not an IPv4/IPv6 address.")

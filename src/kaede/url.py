@@ -1,3 +1,4 @@
+import urllib.parse
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass
 
@@ -10,13 +11,62 @@ class URL:
     query: str
     fragment: str
 
+    DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443, "dns": 53, "ftp": 21}
+
     def __str__(self) -> str:
-        raise NotImplementedError()
+        location = self.netloc
+        value = f"{self.scheme}://{location}" if self.scheme else location
+        value += self.path or ("/" if location else "")
+
+        if self.query:
+            value += f"?{self.query}"
+
+        if self.fragment:
+            value += f"#{self.fragment}"
+
+        return value
 
     @property
     def params(self) -> Dict[str, List[str]]:
-        raise NotImplementedError()
+        found: Dict[str, List[str]] = {}
+
+        for part in self.query.split("&"):
+            if not part:
+                continue
+
+            name, _, value = part.partition("=")
+            found.setdefault(urllib.parse.unquote(name), []).append(urllib.parse.unquote(value))
+
+        return found
 
     @property
     def netloc(self) -> str:
-        raise NotImplementedError()
+        location = f"[{self.host}]" if ":" in self.host else self.host
+
+        if self.port is not None and URL.DEFAULT_PORTS.get(self.scheme) != self.port:
+            location += f":{self.port}"
+
+        return location
+
+    @classmethod
+    def parse(cls, value: str) -> "URL":
+        parts = urllib.parse.urlsplit(value)
+
+        return cls(scheme=parts.scheme, host=parts.hostname or "", port=parts.port, path=parts.path, query=parts.query, fragment=parts.fragment)
+
+    @classmethod
+    def from_target(cls, target: str, scheme: str, authority: str) -> "URL":
+        location = urllib.parse.urlsplit(f"//{authority}")
+
+        if target.startswith("/"): # origin-form
+            parts = urllib.parse.urlsplit(target)
+            return cls(scheme=scheme, host=location.hostname or "", port=location.port, path=parts.path, query=parts.query, fragment=parts.fragment)
+
+        if target == "*": # asterisk-form
+            return cls(scheme=scheme, host=location.hostname or "", port=location.port, path="*", query="", fragment="")
+
+        if "://" in target: # absolute-form
+            return cls.parse(target)
+
+        peer = urllib.parse.urlsplit(f"//{target}") # authority-form
+        return cls(scheme=scheme, host=peer.hostname or "", port=peer.port, path="", query="", fragment="")

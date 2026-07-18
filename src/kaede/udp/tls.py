@@ -5,7 +5,7 @@ from ..tls.models import TLSConfig
 from ..tls.openssl import TLSContext, TLSSession
 from ..tls.errors import TLSError, TLSHandshakeError
 from .models import UDPPort
-from .errors import UDPClosedError, UDPTimeoutError, UDPLimitError
+from .errors import UDPConnectionError, UDPClosedError, UDPTimeoutError, UDPLimitError
 from .protocol import UDPConnection
 
 class DTLSConnection:
@@ -154,7 +154,9 @@ class DTLSConnection:
         if limit is not None and len(data) > limit:
             raise UDPLimitError(f"The message is {len(data)} bytes, but one DTLS record here carries at most {limit}.")
 
-        self.session.write(data)
+        if self.session.write(data) != len(data):
+            raise UDPConnectionError(f"The {len(data)} byte datagram could not be written to the DTLS session.")
+
         await self.flush()
 
     async def receive(self, n: int = -1, timeout: Optional[float] = None) -> bytes:

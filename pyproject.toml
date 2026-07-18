@@ -30,3 +30,6 @@ module-name = "kaede"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "network: opt-in tests that reach real internet services (set KAEDE_NETWORK_TESTS=1 to run)"
+]

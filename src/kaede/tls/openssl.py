@@ -298,6 +298,14 @@ class OpenSSL:
         self.x509_free  = self.bind(self.crypto, "X509_free", VOID, [VOID_P])
         self.x509_check = self.bind(self.crypto, "X509_check_host", INT, [VOID_P, STR, SIZE, UINT, STR_P])
 
+        # Certificate store
+        self.store       = self.bind(self.ssl, "SSL_CTX_get_cert_store", VOID_P, [VOID_P])
+        self.store_add   = self.bind(self.crypto, "X509_STORE_add_cert", INT, [VOID_P, VOID_P])
+        self.store_flags = self.bind(self.crypto, "X509_STORE_set_flags", INT, [VOID_P, ULONG])
+        self.bio_buffer  = self.bind(self.crypto, "BIO_new_mem_buf", VOID_P, [VOID_P, INT])
+        self.pem_x509    = self.bind(self.crypto, "PEM_read_bio_X509", VOID_P, [VOID_P, VOID_P, VOID_P, VOID_P])
+        self.der_x509    = self.bind(self.crypto, "d2i_X509", VOID_P, [VOID_P, ctypes.POINTER(VOID_P), LONG])
+
         # Methods
         self.method        = self.bind(self.ssl, "TLS_method", VOID_P, [])
         self.method_client = self.bind(self.ssl, "TLS_client_method", VOID_P, [])
@@ -506,6 +514,12 @@ class TLSContext:
 
         self.library.context_verify(self.pointer, mode, None)
 
+        if self.config.verify_flags:
+            store = self.library.store(self.pointer)
+
+            if not store or self.library.store_flags(store, int(self.config.verify_flags)) != 1:
+                raise TLSConfigError(f"Could not apply the certificate verify flags: {self.library.reason()}")
+
         if self.config.cafile or self.config.capath:
             cafile = self.config.cafile.encode() if self.config.cafile else None
             capath = self.config.capath.encode() if self.config.capath else None
@@ -513,9 +527,73 @@ class TLSContext:
             if self.library.context_locations(self.pointer, cafile, capath) != 1:
                 raise TLSConfigError(f"Could not load the CA certificates: {self.library.reason()}")
 
-        elif self.config.verify_mode != CERT_NONE:
+        if self.config.cadata is not None:
+            self.apply_authorities()
+
+        if not (self.config.cafile or self.config.capath or self.config.cadata is not None) and self.config.verify_mode != CERT_NONE:
             if self.library.context_paths(self.pointer) != 1:
                 raise TLSConfigError(f"Could not load the default CA certificates: {self.library.reason()}")
+
+    def apply_authorities(self):
+        store = self.library.store(self.pointer)
+
+        if not store:
+            raise TLSConfigError(f"Could not reach the certificate store: {self.library.reason()}")
+
+        data = self.config.cadata
+        loaded = 0
+
+        if isinstance(data, str) or bytes(data).lstrip().startswith(b"-----"):
+            raw = data.encode() if isinstance(data, str) else bytes(data)
+            source = self.library.bio_buffer(raw, len(raw))
+
+            if not source:
+                raise TLSConfigError(f"Could not buffer the CA certificates: {self.library.reason()}")
+
+            try:
+                while True:
+                    certificate = self.library.pem_x509(source, None, None, None)
+
+                    if not certificate:
+                        break
+
+                    added = self.library.store_add(store, certificate)
+                    self.library.x509_free(certificate)
+
+                    if added != 1:
+                        raise TLSConfigError(f"Could not trust a CA certificate: {self.library.reason()}")
+
+                    loaded += 1
+
+            finally:
+                self.library.bio_free(source)
+
+        else:
+            raw = ctypes.create_string_buffer(bytes(data), len(data))
+            cursor = VOID_P(ctypes.addressof(raw))
+            end = ctypes.addressof(raw) + len(data)
+
+            while cursor.value < end:
+                certificate = self.library.der_x509(None, ctypes.byref(cursor), end - cursor.value)
+
+                if not certificate:
+                    if loaded:
+                        raise TLSConfigError(f"The cadata carries {end - cursor.value} trailing bytes that are not a DER certificate: {self.library.reason()}")
+
+                    break
+
+                added = self.library.store_add(store, certificate)
+                self.library.x509_free(certificate)
+
+                if added != 1:
+                    raise TLSConfigError(f"Could not trust a CA certificate: {self.library.reason()}")
+
+                loaded += 1
+
+        self.library.error_clear()
+
+        if not loaded:
+            raise TLSConfigError("The cadata does not contain any PEM or DER certificate.")
 
     def apply_credentials(self):
         if not self.config.certfile:
