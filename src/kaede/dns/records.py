@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from .models import DNSRecordData
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class RawRecordData(DNSRecordData):
     raw: bytes
     rtype_unknown: int
@@ -11,7 +11,11 @@ class RawRecordData(DNSRecordData):
     def pack(self) -> bytes:
         return self.raw
 
-@dataclass(frozen=True, slots=True)
+    @classmethod
+    def unpack(cls, raw, message, offset, rtype_unknown=0):
+        return cls(raw=raw, rtype_unknown=rtype_unknown)
+
+@dataclass(frozen=True)
 class ARecordData(DNSRecordData):
     address: ipaddress.IPv4Address
 
@@ -22,7 +26,7 @@ class ARecordData(DNSRecordData):
     def unpack(cls, raw, message, offset):
         return cls(address=ipaddress.IPv4Address(raw))
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class AAAARecordData(DNSRecordData):
     address: ipaddress.IPv6Address
 
@@ -33,7 +37,7 @@ class AAAARecordData(DNSRecordData):
     def unpack(cls, raw, message, offset):
         return cls(address=ipaddress.IPv6Address(raw))
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class MXRecordData(DNSRecordData):
     preference: int
     exchange: str

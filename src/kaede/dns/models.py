@@ -14,7 +14,7 @@ class DNSPort:
     secure: bool = False
 
     @property
-    def vaild(self) -> bool:
+    def valid(self) -> bool:
         if self.type == "tcp":
             return isinstance(self.value, TCPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
         elif self.type == "udp":
@@ -94,7 +94,7 @@ class DNSRecordData(ABC):
     def unpack(cls, raw: bytes, message: bytes, offset: int) -> "DNSRecordData":
         raise NotImplementedError()
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class DNSRecord:
     name: str
     type: DNSRecordType

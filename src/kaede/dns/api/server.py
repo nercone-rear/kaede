@@ -20,8 +20,8 @@ class DNSServer:
     def __init__(self, *, config: Optional[DNSServerConfig] = None):
         self.config = config or DNSServerConfig()
 
-    def run(self, handler: DNSHandler, workers: int = 4, ports: List[Tuple[str, DNSPort]] = [("0.0.0.0", DNSPort(type="tcp", value=53, secure=False))]):
+    def run(self, handler: DNSHandler, workers: int = 4, ports: Optional[List[Tuple[str, DNSPort]]] = None):
         raise NotImplementedError()
 
-    async def serve(self, handler: DNSHandler, ports: List[Tuple[str, DNSPort]] = [("0.0.0.0", DNSPort(type="tcp", value=53, secure=False))]):
+    async def serve(self, handler: DNSHandler, ports: Optional[List[Tuple[str, DNSPort]]] = None):
         raise NotImplementedError()

@@ -14,7 +14,7 @@ class URL:
         raise NotImplementedError()
 
     @property
-    def params(self) -> Dict[str, List, Dict, Tuple[str]]:
+    def params(self) -> Dict[str, List[str]]:
         raise NotImplementedError()
 
     @property

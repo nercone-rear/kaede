@@ -22,7 +22,7 @@ class HTTPBroadRole(Enum):
     CLIENT = "Client"
     SERVER = "Server"
 
-    def vaild(self, specific: "HTTPRole") -> bool:
+    def valid(self, specific: "HTTPRole") -> bool:
         if specific == HTTPRole.USER_AGENT:
             return self == HTTPBroadRole.CLIENT
         elif specific != HTTPRole.USER_AGENT:
@@ -39,7 +39,7 @@ class HTTPRole(Enum):
     GATEWAY    = "Gateway"
     TUNNEL     = "Tunnel"
 
-    def vaild(self, broad: "HTTPBroadRole") -> bool:
+    def valid(self, broad: "HTTPBroadRole") -> bool:
         if broad == HTTPBroadRole.CLIENT:
             return self == HTTPRole.USER_AGENT
         elif broad == HTTPBroadRole.SERVER:
@@ -56,7 +56,7 @@ class HTTPPort:
     secure: bool = False
 
     @property
-    def vaild(self) -> bool:
+    def valid(self) -> bool:
         if self.type == "uds":
             return isinstance(self.value, str)
         elif self.type == "tcp":

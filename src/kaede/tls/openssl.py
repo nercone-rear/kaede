@@ -3,13 +3,112 @@ import sys
 import glob
 import ctypes
 import ctypes.util
-from typing import Optional, List
+from ssl import CERT_NONE, CERT_REQUIRED
+from typing import Optional, List, Dict
 
-from .errors import TLSLibraryNotFoundError
+from .models import TLSVersion, TLSConfig
+from .errors import TLSLibraryNotFoundError, TLSLibraryError, TLSConfigError, TLSHandshakeError, TLSVerificationError, TLSProtocolError, TLSClosedError
 
 VOID_P = ctypes.c_void_p
 
+class Control:
+    SET_MIN_PROTO_VERSION = 123
+    SET_MAX_PROTO_VERSION = 124
+    SET_GROUPS_LIST       = 92
+    GET_NEGOTIATED_GROUP  = 134
+
+    SET_TLSEXT_HOSTNAME      = 55
+    SET_TLSEXT_SERVERNAME_CB = 53
+
+    NAMETYPE_HOST = 0
+
+class Option:
+    NO_COMPRESSION           = 0x00020000
+    CIPHER_SERVER_PREFERENCE = 0x00400000
+    NO_RENEGOTIATION         = 0x40000000
+
+class Verify:
+    NONE = 0
+    PEER = 1
+    FAIL_IF_NO_PEER_CERT = 2
+
+class Result:
+    NONE             = 0
+    SSL              = 1
+    WANT_READ        = 2
+    WANT_WRITE       = 3
+    WANT_X509_LOOKUP = 4
+    SYSCALL          = 5
+    ZERO_RETURN      = 6
+
+class Alert:
+    OK          = 0
+    ALERT_FATAL = 2
+    NOACK       = 3
+
+class Filetype:
+    PEM  = 1
+    ASN1 = 2
+
+class Protocol:
+    NUMBERS: Dict[TLSVersion, int] = {
+        TLSVersion.TLSv1_0: 0x0301,
+        TLSVersion.TLSv1_1: 0x0302,
+        TLSVersion.TLSv1_2: 0x0303,
+        TLSVersion.TLSv1_3: 0x0304
+    }
+
+    @staticmethod
+    def number(version: TLSVersion) -> int:
+        return Protocol.NUMBERS[version]
+
+class Certificate:
+    REASONS: Dict[int, str] = {
+        10: "the certificate has expired",
+        18: "the certificate is self signed",
+        19: "the certificate chain ends in a self signed certificate",
+        20: "the issuer certificate could not be found locally",
+        62: "the certificate does not match the requested hostname"
+    }
+
+    @staticmethod
+    def reason(code: int) -> str:
+        return Certificate.REASONS.get(code, f"the certificate was rejected (code {code})")
+
+class ALPN:
+    @staticmethod
+    def pack(names: List[str]) -> bytes:
+        wire = b""
+
+        for name in names:
+            encoded = name.encode()
+
+            if not 0 < len(encoded) < 256:
+                raise TLSConfigError(f"The ALPN protocol name {name!r} must be between 1 and 255 bytes.")
+
+            wire += bytes([len(encoded)]) + encoded
+
+        return wire
+
+    @staticmethod
+    def unpack(wire: bytes) -> List[str]:
+        names: List[str] = []
+        offset = 0
+
+        while offset < len(wire):
+            length = wire[offset]
+
+            if length == 0 or offset + 1 + length > len(wire):
+                break
+
+            names.append(wire[offset + 1:offset + 1 + length].decode(errors="replace"))
+            offset += 1 + length
+
+        return names
+
 class OpenSSL:
+    minimum_version = 0x30600000 # OpenSSL 3.6.0
+
     def __init__(self, *, ssl: Optional[ctypes.CDLL] = None, crypto: Optional[ctypes.CDLL] = None):
         self.ssl    = ssl or    OpenSSL.load_library("ssl")
         self.crypto = crypto or OpenSSL.load_library("crypto")
@@ -96,5 +195,466 @@ class OpenSSL:
 
         return unique
 
+    def bind(self, library: ctypes.CDLL, name: str, restype, argtypes: List, required: bool = True):
+        function = getattr(library, name, None)
+
+        if function is None:
+            if required:
+                raise TLSLibraryError(f"The OpenSSL library does not provide {name}. OpenSSL 3.6+ or 4.0+ is required.")
+
+            return None
+
+        function.restype = restype
+        function.argtypes = argtypes
+
+        return function
+
     def configure(self):
-        raise NotImplementedError()
+        VOID    = None
+        INT     = ctypes.c_int
+        UINT    = ctypes.c_uint
+        LONG    = ctypes.c_long
+        ULONG   = ctypes.c_ulong
+        SIZE    = ctypes.c_size_t
+        STR     = ctypes.c_char_p
+        STR_P   = ctypes.POINTER(ctypes.c_char_p)
+        UCHAR_P = ctypes.POINTER(ctypes.c_ubyte)
+        UINT_P  = ctypes.POINTER(ctypes.c_uint)
+
+        # Library
+        self.version_num = self.bind(self.crypto, "OpenSSL_version_num", ULONG, [])
+        self.version     = self.bind(self.crypto, "OpenSSL_version", STR, [INT])
+
+        if self.version_num() < OpenSSL.minimum_version:
+            raise TLSLibraryError(f"OpenSSL 3.6+ or 4.0+ is required, but found {self.version(0).decode()}.")
+
+        # Errors
+        self.error_get   = self.bind(self.crypto, "ERR_get_error", ULONG, [])
+        self.error_clear = self.bind(self.crypto, "ERR_clear_error", VOID, [])
+        self.error_text  = self.bind(self.crypto, "ERR_error_string_n", VOID, [ULONG, STR, SIZE])
+
+        # Memory BIO
+        self.bio_memory  = self.bind(self.crypto, "BIO_s_mem", VOID_P, [])
+        self.bio_new     = self.bind(self.crypto, "BIO_new", VOID_P, [VOID_P])
+        self.bio_free    = self.bind(self.crypto, "BIO_free", INT, [VOID_P])
+        self.bio_write   = self.bind(self.crypto, "BIO_write", INT, [VOID_P, STR, INT])
+        self.bio_read    = self.bind(self.crypto, "BIO_read", INT, [VOID_P, STR, INT])
+        self.bio_pending = self.bind(self.crypto, "BIO_ctrl_pending", SIZE, [VOID_P])
+
+        # Certificates
+        self.x509_free  = self.bind(self.crypto, "X509_free", VOID, [VOID_P])
+        self.x509_check = self.bind(self.crypto, "X509_check_host", INT, [VOID_P, STR, SIZE, UINT, STR_P])
+
+        # Methods
+        self.method        = self.bind(self.ssl, "TLS_method", VOID_P, [])
+        self.method_client = self.bind(self.ssl, "TLS_client_method", VOID_P, [])
+        self.method_server = self.bind(self.ssl, "TLS_server_method", VOID_P, [])
+
+        # Context
+        self.context_new          = self.bind(self.ssl, "SSL_CTX_new", VOID_P, [VOID_P])
+        self.context_free         = self.bind(self.ssl, "SSL_CTX_free", VOID, [VOID_P])
+        self.context_ctrl         = self.bind(self.ssl, "SSL_CTX_ctrl", LONG, [VOID_P, INT, LONG, VOID_P])
+        self.context_callback     = self.bind(self.ssl, "SSL_CTX_callback_ctrl", LONG, [VOID_P, INT, VOID_P])
+        self.context_options      = self.bind(self.ssl, "SSL_CTX_set_options", ULONG, [VOID_P, ULONG])
+        self.context_verify       = self.bind(self.ssl, "SSL_CTX_set_verify", VOID, [VOID_P, INT, VOID_P])
+        self.context_verify_depth = self.bind(self.ssl, "SSL_CTX_set_verify_depth", VOID, [VOID_P, INT])
+        self.context_paths        = self.bind(self.ssl, "SSL_CTX_set_default_verify_paths", INT, [VOID_P])
+        self.context_locations    = self.bind(self.ssl, "SSL_CTX_load_verify_locations", INT, [VOID_P, STR, STR])
+        self.context_certificate  = self.bind(self.ssl, "SSL_CTX_use_certificate_chain_file", INT, [VOID_P, STR])
+        self.context_key          = self.bind(self.ssl, "SSL_CTX_use_PrivateKey_file", INT, [VOID_P, STR, INT])
+        self.context_key_check    = self.bind(self.ssl, "SSL_CTX_check_private_key", INT, [VOID_P])
+        self.context_ciphers      = self.bind(self.ssl, "SSL_CTX_set_cipher_list", INT, [VOID_P, STR])
+        self.context_ciphersuites = self.bind(self.ssl, "SSL_CTX_set_ciphersuites", INT, [VOID_P, STR])
+        self.context_alpn         = self.bind(self.ssl, "SSL_CTX_set_alpn_protos", INT, [VOID_P, UCHAR_P, UINT])
+        self.context_alpn_select  = self.bind(self.ssl, "SSL_CTX_set_alpn_select_cb", VOID, [VOID_P, VOID_P, VOID_P])
+
+        # Session
+        self.new           = self.bind(self.ssl, "SSL_new", VOID_P, [VOID_P])
+        self.free          = self.bind(self.ssl, "SSL_free", VOID, [VOID_P])
+        self.ctrl          = self.bind(self.ssl, "SSL_ctrl", LONG, [VOID_P, INT, LONG, VOID_P])
+        self.set_bio       = self.bind(self.ssl, "SSL_set_bio", VOID, [VOID_P, VOID_P, VOID_P])
+        self.set_context   = self.bind(self.ssl, "SSL_set_SSL_CTX", VOID_P, [VOID_P, VOID_P])
+        self.set_host      = self.bind(self.ssl, "SSL_set1_host", INT, [VOID_P, STR])
+        self.connect_state = self.bind(self.ssl, "SSL_set_connect_state", VOID, [VOID_P])
+        self.accept_state  = self.bind(self.ssl, "SSL_set_accept_state", VOID, [VOID_P])
+        self.handshake     = self.bind(self.ssl, "SSL_do_handshake", INT, [VOID_P])
+        self.read          = self.bind(self.ssl, "SSL_read", INT, [VOID_P, STR, INT])
+        self.write         = self.bind(self.ssl, "SSL_write", INT, [VOID_P, STR, INT])
+        self.shutdown      = self.bind(self.ssl, "SSL_shutdown", INT, [VOID_P])
+        self.get_error     = self.bind(self.ssl, "SSL_get_error", INT, [VOID_P, INT])
+
+        # Session information
+        self.get_version     = self.bind(self.ssl, "SSL_get_version", STR, [VOID_P])
+        self.get_group       = self.bind(self.ssl, "SSL_get0_group_name", STR, [VOID_P])
+        self.get_cipher      = self.bind(self.ssl, "SSL_get_current_cipher", VOID_P, [VOID_P])
+        self.cipher_name     = self.bind(self.ssl, "SSL_CIPHER_get_name", STR, [VOID_P])
+        self.get_verify      = self.bind(self.ssl, "SSL_get_verify_result", LONG, [VOID_P])
+        self.get_certificate = self.bind(self.ssl, "SSL_get1_peer_certificate", VOID_P, [VOID_P])
+        self.get_alpn        = self.bind(self.ssl, "SSL_get0_alpn_selected", VOID, [VOID_P, ctypes.POINTER(UCHAR_P), UINT_P])
+        self.get_servername  = self.bind(self.ssl, "SSL_get_servername", STR, [VOID_P, INT])
+        self.reused          = self.bind(self.ssl, "SSL_session_reused", INT, [VOID_P])
+
+    def drain(self) -> List[str]:
+        reasons: List[str] = []
+        text = ctypes.create_string_buffer(512)
+
+        while True:
+            code = self.error_get()
+
+            if not code:
+                return reasons
+
+            self.error_text(code, text, len(text))
+            reasons.append(text.value.decode(errors="replace"))
+
+    def reason(self, default: str = "unknown error") -> str:
+        return "; ".join(self.drain()) or default
+
+class TLSContext:
+    def __init__(self, config: Optional[TLSConfig] = None, *, server: bool = False, alpn: Optional[List[str]] = None, library: Optional[OpenSSL] = None):
+        self.config = config or TLSConfig()
+        self.server = server
+        self.alpn = alpn
+        self.library = library or OpenSSL()
+
+        self.pointer = None
+        self.callbacks: List = []
+
+        self.build()
+
+    def build(self):
+        library = self.library
+        library.error_clear()
+
+        self.pointer = library.context_new(library.method_server() if self.server else library.method_client())
+
+        if not self.pointer:
+            raise TLSConfigError(f"Could not create the TLS context: {library.reason()}")
+
+        library.context_ctrl(self.pointer, Control.SET_MIN_PROTO_VERSION, Protocol.number(self.config.minimum_version), None)
+        library.context_options(self.pointer, Option.NO_COMPRESSION | Option.NO_RENEGOTIATION)
+
+        self.apply_groups()
+        self.apply_ciphers()
+        self.apply_verification()
+        self.apply_credentials()
+        self.apply_alpn()
+
+    def apply_groups(self):
+        groups = ":".join(group.value for group in self.config.groups)
+
+        if not groups:
+            return
+
+        if self.library.context_ctrl(self.pointer, Control.SET_GROUPS_LIST, 0, groups.encode()) != 1:
+            raise TLSConfigError(f"OpenSSL rejected the group list {groups!r}: {self.library.reason()}")
+
+    def apply_ciphers(self):
+        suites  = ":".join(c.value for c in self.config.ciphers if c.value.startswith("TLS_"))
+        ciphers = ":".join(c.value for c in self.config.ciphers if not c.value.startswith("TLS_"))
+
+        if not suites and not ciphers:
+            raise TLSConfigError("At least one cipher has to be configured.")
+
+        if not suites and self.config.minimum_version == TLSVersion.TLSv1_3:
+            raise TLSConfigError("The minimum version is TLS 1.3, but no TLS 1.3 cipher suite is configured.")
+
+        if self.library.context_ciphersuites(self.pointer, suites.encode()) != 1:
+            raise TLSConfigError(f"OpenSSL rejected the TLS 1.3 cipher suites {suites!r}: {self.library.reason()}")
+
+        if not suites:
+            self.library.context_ctrl(self.pointer, Control.SET_MAX_PROTO_VERSION, Protocol.number(TLSVersion.TLSv1_2), None)
+
+        if ciphers:
+            if self.library.context_ciphers(self.pointer, ciphers.encode()) != 1:
+                raise TLSConfigError(f"OpenSSL rejected the cipher list {ciphers!r}: {self.library.reason()}")
+
+        else:
+            self.library.context_ctrl(self.pointer, Control.SET_MIN_PROTO_VERSION, Protocol.number(TLSVersion.TLSv1_3), None)
+
+    def apply_verification(self):
+        mode = Verify.NONE
+
+        if self.config.verify_mode != CERT_NONE:
+            mode = Verify.PEER
+
+            if self.server and self.config.verify_mode == CERT_REQUIRED:
+                mode |= Verify.FAIL_IF_NO_PEER_CERT
+
+        self.library.context_verify(self.pointer, mode, None)
+
+        if self.config.cafile or self.config.capath:
+            cafile = self.config.cafile.encode() if self.config.cafile else None
+            capath = self.config.capath.encode() if self.config.capath else None
+
+            if self.library.context_locations(self.pointer, cafile, capath) != 1:
+                raise TLSConfigError(f"Could not load the CA certificates: {self.library.reason()}")
+
+        elif self.config.verify_mode != CERT_NONE:
+            if self.library.context_paths(self.pointer) != 1:
+                raise TLSConfigError(f"Could not load the default CA certificates: {self.library.reason()}")
+
+    def apply_credentials(self):
+        if not self.config.certfile:
+            return
+
+        if self.library.context_certificate(self.pointer, self.config.certfile.encode()) != 1:
+            raise TLSConfigError(f"Could not load the certificate {self.config.certfile!r}: {self.library.reason()}")
+
+        keyfile = self.config.keyfile or self.config.certfile
+
+        if self.library.context_key(self.pointer, keyfile.encode(), Filetype.PEM) != 1:
+            raise TLSConfigError(f"Could not load the private key {keyfile!r}: {self.library.reason()}")
+
+        if self.library.context_key_check(self.pointer) != 1:
+            raise TLSConfigError(f"The private key {keyfile!r} does not match the certificate: {self.library.reason()}")
+
+    def apply_alpn(self):
+        if not self.alpn:
+            return
+
+        if self.server:
+            self.select_alpn()
+            return
+
+        wire = ALPN.pack(self.alpn)
+
+        if self.library.context_alpn(self.pointer, ctypes.cast(ctypes.c_char_p(wire), ctypes.POINTER(ctypes.c_ubyte)), len(wire)) != 0:
+            raise TLSConfigError(f"OpenSSL rejected the ALPN protocols {self.alpn}: {self.library.reason()}")
+
+    def select_alpn(self):
+        signature = ctypes.CFUNCTYPE(ctypes.c_int, VOID_P, ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)), ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_ubyte), ctypes.c_uint, VOID_P)
+        preference = list(self.alpn)
+
+        def choose(session, out, outlen, incoming, length, argument):
+            offered = bytes(bytearray(incoming[:length]))
+            positions: Dict[str, tuple] = {}
+            offset = 0
+
+            while offset < len(offered):
+                size = offered[offset]
+
+                if size == 0 or offset + 1 + size > len(offered):
+                    break
+
+                positions.setdefault(offered[offset + 1:offset + 1 + size].decode(errors="replace"), (offset + 1, size))
+                offset += 1 + size
+
+            for name in preference:
+                if name in positions:
+                    start, size = positions[name]
+
+                    out[0] = ctypes.cast(ctypes.addressof(incoming.contents) + start, ctypes.POINTER(ctypes.c_ubyte))
+                    outlen[0] = size
+                    return Alert.OK
+
+            return Alert.ALERT_FATAL
+
+        callback = signature(choose)
+        self.callbacks.append(callback)
+
+        self.library.context_alpn_select(self.pointer, ctypes.cast(callback, VOID_P), None)
+
+    def session(self, *, hostname: Optional[str] = None) -> "TLSSession":
+        return TLSSession(self, hostname=hostname)
+
+    def free(self):
+        if self.pointer:
+            self.library.context_free(self.pointer)
+            self.pointer = None
+
+    def __del__(self):
+        self.free()
+
+class TLSSession:
+    def __init__(self, context: TLSContext, *, hostname: Optional[str] = None):
+        self.context = context
+        self.library = context.library
+        self.server = context.server
+        self.hostname = hostname
+
+        self.established = False
+        self.closed = False
+
+        self.pointer = self.library.new(context.pointer)
+
+        if not self.pointer:
+            raise TLSHandshakeError(f"Could not create the TLS session: {self.library.reason()}")
+
+        self.incoming = self.library.bio_new(self.library.bio_memory())
+        self.outgoing = self.library.bio_new(self.library.bio_memory())
+        self.library.set_bio(self.pointer, self.incoming, self.outgoing)
+
+        if self.server:
+            self.library.accept_state(self.pointer)
+        else:
+            self.prepare()
+            self.library.connect_state(self.pointer)
+
+    def prepare(self):
+        if not self.hostname:
+            return
+
+        if not self.hostname.replace(".", "").isdigit() and ":" not in self.hostname:
+            self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(self.hostname.encode()), VOID_P))
+
+        if self.context.config.verify_mode != CERT_NONE:
+            self.library.set_host(self.pointer, self.hostname.encode())
+
+    def feed(self, data: bytes):
+        if not data:
+            return
+
+        written = self.library.bio_write(self.incoming, data, len(data))
+
+        if written != len(data):
+            raise TLSProtocolError(f"Only {written} of {len(data)} bytes could be buffered: {self.library.reason()}")
+
+    def drain(self) -> bytes:
+        chunks: List[bytes] = []
+
+        while True:
+            pending = self.library.bio_pending(self.outgoing)
+
+            if not pending:
+                return b"".join(chunks)
+
+            buffer = ctypes.create_string_buffer(pending)
+            read = self.library.bio_read(self.outgoing, buffer, pending)
+
+            if read <= 0:
+                return b"".join(chunks)
+
+            chunks.append(buffer.raw[:read])
+
+    def handshake(self) -> bool:
+        if self.established:
+            return True
+
+        self.library.error_clear()
+        code = self.library.handshake(self.pointer)
+
+        if code == 1:
+            self.established = True
+            return True
+
+        result = self.library.get_error(self.pointer, code)
+
+        if result in (Result.WANT_READ, Result.WANT_WRITE):
+            return False
+
+        self.fail("The TLS handshake failed")
+
+    def read(self, n: int = 16384) -> bytes:
+        buffer = ctypes.create_string_buffer(n)
+
+        self.library.error_clear()
+        code = self.library.read(self.pointer, buffer, n)
+
+        if code > 0:
+            return buffer.raw[:code]
+
+        result = self.library.get_error(self.pointer, code)
+
+        if result == Result.ZERO_RETURN:
+            self.closed = True
+            return b""
+
+        if result in (Result.WANT_READ, Result.WANT_WRITE):
+            return b""
+
+        if result == Result.SYSCALL and not self.library.drain():
+            self.closed = True
+            return b""
+
+        self.fail("The TLS session could not be read")
+
+    def write(self, data: bytes) -> int:
+        if self.closed:
+            raise TLSClosedError("This TLS session is already closed.")
+
+        if not data:
+            return 0
+
+        self.library.error_clear()
+        code = self.library.write(self.pointer, data, len(data))
+
+        if code > 0:
+            return code
+
+        result = self.library.get_error(self.pointer, code)
+
+        if result in (Result.WANT_READ, Result.WANT_WRITE):
+            return 0
+
+        self.fail("The TLS session could not be written to")
+
+    def unwrap(self):
+        if self.closed or not self.pointer:
+            return
+
+        self.library.error_clear()
+        self.library.shutdown(self.pointer)
+        self.closed = True
+
+    def fail(self, message: str):
+        code = self.library.get_verify(self.pointer)
+        reason = self.library.reason()
+
+        if code != 0:
+            raise TLSVerificationError(f"{message}: {Certificate.reason(code)} ({reason})", code)
+
+        raise TLSHandshakeError(f"{message}: {reason}")
+
+    @property
+    def version(self) -> Optional[str]:
+        value = self.library.get_version(self.pointer)
+        return value.decode() if value else None
+
+    @property
+    def cipher(self) -> Optional[str]:
+        current = self.library.get_cipher(self.pointer)
+
+        if not current:
+            return None
+
+        value = self.library.cipher_name(current)
+        return value.decode() if value else None
+
+    @property
+    def group(self) -> Optional[str]:
+        value = self.library.get_group(self.pointer)
+        return value.decode() if value else None
+
+    @property
+    def protocol(self) -> Optional[str]:
+        data = ctypes.POINTER(ctypes.c_ubyte)()
+        length = ctypes.c_uint(0)
+
+        self.library.get_alpn(self.pointer, ctypes.byref(data), ctypes.byref(length))
+
+        if not length.value or not data:
+            return None
+
+        return bytes(bytearray(data[:length.value])).decode(errors="replace")
+
+    @property
+    def servername(self) -> Optional[str]:
+        value = self.library.get_servername(self.pointer, Control.NAMETYPE_HOST)
+        return value.decode() if value else None
+
+    @property
+    def verified(self) -> bool:
+        return self.library.get_verify(self.pointer) == 0
+
+    @property
+    def reused(self) -> bool:
+        return bool(self.library.reused(self.pointer))
+
+    def free(self):
+        if self.pointer:
+            self.library.free(self.pointer)
+            self.pointer = None
+
+    def __del__(self):
+        self.free()

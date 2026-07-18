@@ -20,8 +20,8 @@ class UDPServer:
     def __init__(self, config: Optional[UDPServerConfig] = None):
         self.config = config or UDPServerConfig()
 
-    def run(self, handler: UDPHandler, workers: int = 4, ports: List[Tuple[str, UDPPort]] = []):
+    def run(self, handler: UDPHandler, workers: int = 4, ports: Optional[List[Tuple[str, UDPPort]]] = None):
         raise NotImplementedError()
 
-    async def serve(self, handler: UDPHandler, ports: List[Tuple[str, UDPPort]] = []):
+    async def serve(self, handler: UDPHandler, ports: Optional[List[Tuple[str, UDPPort]]] = None):
         raise NotImplementedError()

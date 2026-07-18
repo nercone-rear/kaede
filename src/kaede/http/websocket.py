@@ -5,7 +5,7 @@ if TYPE_CHECKING:
     from .protocol import HTTPConnection
 
 class WSConnection:
-    def __init__(self, src: Tuple[str, HTTPPort], dst: Tuple[str, HTTPPort], *, transport: HTTPConnection):
+    def __init__(self, src: Tuple[str, "HTTPPort"], dst: Tuple[str, "HTTPPort"], *, transport: "HTTPConnection"):
         self.src = src
         self.dst = dst
 

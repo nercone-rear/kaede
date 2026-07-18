@@ -14,7 +14,7 @@ class HTTPServerLimits(ServerLimits, HTTPLimits):
 
 @dataclass
 class HTTPServerConfig:
-    versions: List[HTTPVersion] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
+    versions: List[HTTPVersion] = field(default_factory=lambda: ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"])
 
     limits: HTTPServerLimits = field(default_factory=lambda: HTTPServerLimits())
 
@@ -35,8 +35,8 @@ class HTTPServer:
         self.role = role
         self.config = config or HTTPServerConfig()
 
-    def run(self, handler: HTTPHandler, workers: int = 4, ports: List[Tuple[str, HTTPPort]] = [("0.0.0.0", HTTPPort(type="tcp", value=8080, secure=False))]):
+    def run(self, handler: HTTPHandler, workers: int = 4, ports: Optional[List[Tuple[str, HTTPPort]]] = None):
         raise NotImplementedError()
 
-    async def serve(self, handler: HTTPHandler, ports: List[Tuple[str, HTTPPort]] = [("0.0.0.0", HTTPPort(type="tcp", value=8080, secure=False))]):
+    async def serve(self, handler: HTTPHandler, ports: Optional[List[Tuple[str, HTTPPort]]] = None):
         raise NotImplementedError()

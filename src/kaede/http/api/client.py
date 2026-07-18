@@ -9,9 +9,9 @@ from ..websocket import WSConnection
 
 @dataclass
 class HTTPClientConfig:
-    versions: List[HTTPVersion] = ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
+    versions: List[HTTPVersion] = field(default_factory=lambda: ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"])
 
-    limits: HTTPLimits = field(lambda: HTTPLimits())
+    limits: HTTPLimits = field(default_factory=lambda: HTTPLimits())
 
     tls: Union[TLSConfig, Dict[str, TLSConfig]] = field(default_factory=lambda: TLSConfig()) # TLSConfig or {hostname: TLSConfig, ...}
 

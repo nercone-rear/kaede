@@ -20,8 +20,8 @@ class QUICServer:
     def __init__(self, config: Optional[QUICServerConfig] = None):
         self.config = config or QUICServerConfig()
 
-    def run(self, handler: QUICHandler, workers: int = 4, ports: List[Tuple[str, UDPPort]] = []):
+    def run(self, handler: QUICHandler, workers: int = 4, ports: Optional[List[Tuple[str, UDPPort]]] = None):
         raise NotImplementedError()
 
-    async def serve(self, handler: QUICHandler, ports: List[Tuple[str, UDPPort]] = []):
+    async def serve(self, handler: QUICHandler, ports: Optional[List[Tuple[str, UDPPort]]] = None):
         raise NotImplementedError()

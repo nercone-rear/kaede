@@ -9,7 +9,7 @@ class TLSVersion(Enum):
     TLSv1_2 = "TLSv1.2"
     TLSv1_3 = "TLSv1.3"
 
-    @classmethod
+    @staticmethod
     def from_float(value: float) -> "TLSVersion":
         return VERSION_MAP[value]
 
@@ -61,7 +61,7 @@ class TLSGroup(Enum):
     SECP256R1MLKEM768  = "SecP256r1MLKEM768"
     SECP384R1MLKEM1024 = "SecP384r1MLKEM1024"
 
-    @classmethod
+    @staticmethod
     def from_name(value: str) -> "TLSGroup":
         return GROUP_MAP[value.upper()]
 
@@ -252,7 +252,7 @@ class TLSCipher(Enum):
     TLS_AES_256_GCM_SHA384       = "TLS_AES_256_GCM_SHA384"
     TLS_CHACHA20_POLY1305_SHA256 = "TLS_CHACHA20_POLY1305_SHA256"
 
-    @classmethod
+    @staticmethod
     def from_name(value: str) -> "TLSCipher":
         return CIPHER_MAP[value.upper()]
 
@@ -260,7 +260,7 @@ VERSION_MAP: Dict[float, TLSVersion] = {float(v.value.split("v")[1]): v for v in
 GROUP_MAP:   Dict[str, TLSGroup]     = {g.value.upper(): g for g in TLSGroup}
 CIPHER_MAP:  Dict[str, TLSCipher]    = {c.value.upper(): c for c in TLSCipher}
 
-@dataclass(kw_only=True)
+@dataclass
 class TLSConfig:
     minimum_version: TLSVersion = TLSVersion.TLSv1_2
 
