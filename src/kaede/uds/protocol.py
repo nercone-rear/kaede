@@ -1,3 +1,4 @@
+import time
 import asyncio
 from typing import Optional, TYPE_CHECKING
 
@@ -25,6 +26,8 @@ class UDSConnection:
         self.sent_eof = False
         self.closed = False
         self.error: Optional[UDSLostError] = None
+
+        self.active = time.monotonic()
 
         self.reading = True
         self.held = False
@@ -64,6 +67,8 @@ class UDSConnection:
 
         if data:
             self.transport.write(data)
+
+        self.active = time.monotonic()
 
         await self.drain()
 
@@ -205,12 +210,32 @@ class UDSConnection:
 
     def feed(self, data: bytes):
         self.buffer += data
+        self.active = time.monotonic()
 
         if self.reading and self.full():
             self.transport.pause_reading()
             self.reading = False
 
         self.wake()
+
+    def drop(self):
+        # An immediate teardown used by the server to reap an idle connection.
+        # It aborts the transport and reports end-of-file so a handler blocked in
+        # receive() wakes at once rather than holding a connection slot forever.
+        if self.closed:
+            return
+
+        self.closed = True
+        self.eof = True
+
+        if self.transport is not None:
+            self.transport.abort()
+
+        self.wake()
+
+        for future in (self.writer, self.waiter):
+            if future is not None and not future.done():
+                future.set_result(None)
 
     def feed_eof(self):
         self.eof = True

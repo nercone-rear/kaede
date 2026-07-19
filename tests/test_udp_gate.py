@@ -147,3 +147,16 @@ class TestHousekeeping:
 
         assert limits.max_connection_nums == 16384
         assert limits.max_connection_rate == [(1, 25), (5, 50), (60, 75)]
+
+class TestHistoryBound:
+    def test_the_tracked_hosts_are_capped(self):
+        # UDP source addresses are spoofable, so the per-host rate table must not
+        # grow without bound between sweeps. Once the cap is reached, admitting a
+        # new host evicts the oldest one rather than growing the table.
+        g = gate(nums=100000, rate=[])
+        g.history_limit = 10
+
+        for i in range(50):
+            g.rate(f"10.1.{i // 256}.{i % 256}", now=0)
+
+        assert len(g.history) == 10

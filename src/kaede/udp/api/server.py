@@ -43,6 +43,7 @@ class UDPGate:
         self.limits = limits
         self.connections = 0
         self.history: Dict[str, Deque[float]] = {}
+        self.history_limit = max(1024, limits.max_connection_nums) # a hard bound on tracked hosts; UDP source addresses are spoofable
 
     @property
     def window(self) -> float:
@@ -65,6 +66,9 @@ class UDPGate:
 
         if record is None:
             record = self.history[host] = deque()
+
+            while len(self.history) > self.history_limit:
+                del self.history[next(iter(self.history))]
 
         while record and now - record[0] > self.window:
             record.popleft()
@@ -238,8 +242,13 @@ class UDPServer:
         if self.tasks:
             await asyncio.wait(set(self.tasks), timeout=timeout)
 
-        for task in set(self.tasks):
+        pending = set(self.tasks)
+
+        for task in pending:
             task.cancel()
+
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
         for transport in self.endpoints:
             transport.close()

@@ -113,11 +113,11 @@ class HTTPServer:
             raise HTTPError(500, f"The port {port!r} is not a valid HTTP port.")
 
         if port.type == "uds":
-            server = UDSServer(UDSServerConfig(limits=self.limits(UDSServerLimits)))
+            server = UDSServer(UDSServerConfig(limits=self.limits(UDSServerLimits), idle_timeout=self.config.idle_timeout))
             await server.listen(HUHandler(self), [UDSAddress(str(port.value))])
 
         elif port.type == "tcp":
-            config = TCPServerConfig(limits=self.limits(TCPServerLimits), handshake_timeout=self.config.handshake_timeout)
+            config = TCPServerConfig(limits=self.limits(TCPServerLimits), idle_timeout=self.config.idle_timeout, handshake_timeout=self.config.handshake_timeout)
 
             if port.secure:
                 config.tls = self.credentials(host)

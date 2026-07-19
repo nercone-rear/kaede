@@ -23,6 +23,8 @@ class UDSServerConfig:
 
     mode: Optional[int] = None # permission bits applied to each bound socket file, e.g. 0o600.
 
+    idle_timeout: Optional[float] = None # drop a connection with no traffic for this long; None disables reaping
+
 class UDSHandler:
     def __init__(self, on_connection: Optional[Callable] = None):
         self.on_connection = on_connection # (connection: UDSConnection) -> None
@@ -87,11 +89,16 @@ class UDSServer:
         self.connections = set()
         self.tasks = set()
 
+        self.sweeper: Optional[asyncio.Future] = None
         self.stopped: Optional[asyncio.Event] = None
 
     @property
     def paths(self) -> List[UDSAddress]:
         return [UDSProtocol.address(sock.getsockname()) for server in self.servers for sock in (server.sockets or ())]
+
+    @property
+    def interval(self) -> float:
+        return max(1.0, self.config.idle_timeout / 4) if self.config.idle_timeout else max(1.0, self.gate.window)
 
     async def listen(self, handler: UDSHandler, paths: Optional[List[UDSAddress]] = None, *, sockets: Optional[List[socket.socket]] = None):
         if not paths and not sockets:
@@ -125,6 +132,8 @@ class UDSServer:
 
         self.servers = servers
 
+        self.sweeper = asyncio.ensure_future(self.watch())
+
     async def serve(self, handler: UDSHandler, paths: Optional[List[UDSAddress]] = None, *, sockets: Optional[List[socket.socket]] = None):
         await self.listen(handler, paths, sockets=sockets)
         await self.stopped.wait()
@@ -133,11 +142,24 @@ class UDSServer:
         self.unlink(path)
 
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.bind(str(path))
-        sock.listen(100)
 
+        # Bind under a restrictive umask so the socket file is never reachable
+        # with looser permissions between bind() and the chmod below; otherwise
+        # a peer could connect during that window (before listen() even).
         if self.config.mode is not None and not path.abstract:
+            previous = os.umask(0o777 & ~self.config.mode)
+
+            try:
+                sock.bind(str(path))
+            finally:
+                os.umask(previous)
+
             os.chmod(str(path), self.config.mode)
+
+        else:
+            sock.bind(str(path))
+
+        sock.listen(100)
 
         return sock
 
@@ -186,8 +208,26 @@ class UDSServer:
             self.connections.discard(connection)
             self.gate.release()
 
+    async def watch(self):
+        while True:
+            await asyncio.sleep(self.interval)
+            self.expire()
+
+    def expire(self, now: Optional[float] = None):
+        if self.config.idle_timeout is None:
+            return
+
+        now = time.monotonic() if now is None else now
+
+        for connection in [c for c in self.connections if now - c.active > self.config.idle_timeout]:
+            connection.drop()
+
     async def close(self, timeout: Optional[float] = None):
         paths = self.paths
+
+        if self.sweeper is not None:
+            self.sweeper.cancel()
+            self.sweeper = None
 
         for server in self.servers:
             server.close()
@@ -195,11 +235,16 @@ class UDSServer:
         if self.tasks:
             await asyncio.wait(set(self.tasks), timeout=timeout)
 
-        for task in set(self.tasks):
+        pending = set(self.tasks)
+
+        for task in pending:
             task.cancel()
 
         for connection in list(self.connections):
             await connection.close()
+
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
         for server in self.servers:
             await server.wait_closed()

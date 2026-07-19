@@ -75,6 +75,17 @@ class TestTargets:
         assert url.path == "/index.html"
         assert url.query == "q=1"
 
+    def test_an_origin_form_double_slash_stays_in_the_path(self):
+        # RFC 9112 section 3.2.1: an origin-form target is a literal
+        # absolute-path, so a leading "//host" must not be reinterpreted as an
+        # authority. Otherwise url.path ("/path") would disagree with the target
+        # on the wire ("//evil.example/path"), a path-confusion primitive.
+        url = URL.from_target("//evil.example/path", "https", "example.com")
+
+        assert url.host == "example.com"
+        assert url.path == "//evil.example/path"
+        assert url.query == ""
+
     def test_absolute_form(self):
         url = URL.from_target("http://other.example/x", "https", "example.com")
 

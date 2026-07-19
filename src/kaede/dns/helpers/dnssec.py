@@ -229,7 +229,11 @@ class DNSSECValidator:
         if delegation.key_tag != self.keytag(key) or delegation.algorithm != key.algorithm:
             return False
 
-        digests = {1: hashlib.sha1, 2: hashlib.sha256, 4: hashlib.sha384}
+        # RFC 8624 section 3.3: SHA-1 (digest type 1) is deprecated and a
+        # validator must not treat a SHA-1 DS as proving the delegation, so only
+        # SHA-256 and SHA-384 are honoured; a SHA-1-only delegation falls back to
+        # insecure rather than secure.
+        digests = {2: hashlib.sha256, 4: hashlib.sha384}
         digest = digests.get(delegation.digest_type)
 
         if digest is None:

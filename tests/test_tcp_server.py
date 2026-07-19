@@ -313,3 +313,62 @@ class TestClient:
 
         with pytest.raises(Exception):
             await client.open()
+
+class TestIdle:
+    # A client may finish the handshake and then fall silent, holding a
+    # connection slot forever. With an idle_timeout the server reaps such a
+    # connection and unblocks the handler waiting on it.
+
+    async def test_an_idle_connection_is_reaped(self):
+        woken = asyncio.Event()
+
+        async def stall(connection):
+            await connection.receive(1)  # blocks until the reaper drops the connection
+            woken.set()
+
+        server = TCPServer(TCPServerConfig(idle_timeout=0.05))
+        await server.listen(TCPHandler(stall), [(LOCAL, TCPPort(0))])
+
+        try:
+            async with TCPClient(server.ports[0]):
+                await asyncio.sleep(0.15)  # go idle past idle_timeout
+                server.expire()            # force the sweep deterministically
+
+                await asyncio.wait_for(woken.wait(), 2)
+
+        finally:
+            await server.close(timeout=2)
+
+    async def test_a_fresh_connection_is_kept(self):
+        async def hold(connection):
+            await connection.receive(1)
+
+        server = TCPServer(TCPServerConfig(idle_timeout=100.0))
+        await server.listen(TCPHandler(hold), [(LOCAL, TCPPort(0))])
+
+        try:
+            async with TCPClient(server.ports[0]):
+                await asyncio.sleep(0.1)
+                server.expire()  # idle_timeout is far away, so the connection survives
+
+                assert len(server.connections) == 1
+
+        finally:
+            await server.close(timeout=2)
+
+    async def test_reaping_is_off_without_an_idle_timeout(self):
+        async def hold(connection):
+            await connection.receive(1)
+
+        server = TCPServer(TCPServerConfig())  # idle_timeout defaults to None
+        await server.listen(TCPHandler(hold), [(LOCAL, TCPPort(0))])
+
+        try:
+            async with TCPClient(server.ports[0]):
+                await asyncio.sleep(0.1)
+                server.expire()
+
+                assert len(server.connections) == 1
+
+        finally:
+            await server.close(timeout=2)
