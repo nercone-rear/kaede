@@ -134,8 +134,14 @@ class HTTPClient:
         key = (host, port, secure)
         kept = self.sessions.get(key)
 
-        if kept is not None and not kept[0].closing and kept[0].error is None:
-            return kept[0]
+        if kept is not None:
+            if not kept[0].closing and kept[0].error is None:
+                return kept[0]
+
+            del self.sessions[key]
+
+            kept[1].cancel()
+            await kept[0].shutdown()
 
         transport = await self.open(host, port, secure, timeout, alpn=self.alpn())
 
@@ -159,8 +165,15 @@ class HTTPClient:
         key = (host, port)
         kept = self.tunnels.get(key)
 
-        if kept is not None and not kept[1].closing:
-            return kept[1]
+        if kept is not None:
+            if not kept[1].closing:
+                return kept[1]
+
+            del self.tunnels[key]
+
+            kept[2].cancel()
+            await kept[1].shutdown()
+            await kept[0].close()
 
         client = QUICClient((host, UDPPort(port)), config=QUICClientConfig(
             connect_timeout=timeout if timeout is not None else self.config.connect_timeout,
@@ -182,6 +195,8 @@ class HTTPClient:
         return session
 
     async def overhear(self, session: H3Session):
+        tasks = set()
+
         try:
             while True:
                 stream = await session.connection.accept()
@@ -190,10 +205,16 @@ class HTTPClient:
                     await session.fail(H3Code.STREAM_CREATION_ERROR, "The server opened a bidirectional stream.")
                     return
 
-                asyncio.ensure_future(session.consume(stream))
+                task = asyncio.ensure_future(session.consume(stream))
+                tasks.add(task)
+                task.add_done_callback(tasks.discard)
 
         except QUICError:
             return
+
+        finally:
+            for task in set(tasks):
+                task.cancel()
 
     def target(self, url: URL) -> str:
         target = url.path or "/"
@@ -240,6 +261,8 @@ class HTTPClient:
         dst = (host, HTTPPort("tcp", TCPPort(port), secure))
 
         connection = H1Connection(src, dst, transport=transport, role=HTTPBroadRole.CLIENT, version=version, limits=self.config.limits, observer=lambda message: self.notice(host, secure, message))
+
+        self.connections = [kept for kept in self.connections if not kept.transport.closed]
         self.connections.append(connection)
 
         return connection

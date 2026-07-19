@@ -840,29 +840,31 @@ class H2Connection(HTTPConnection):
             finally:
                 self.ready = None
 
-        if self.reset_code is not None:
-            raise HTTPError(502, f"The peer reset the stream with code {self.reset_code}.")
+        try:
+            if self.reset_code is not None:
+                raise HTTPError(502, f"The peer reset the stream with code {self.reset_code}.")
 
-        message = self.request if self.role == HTTPBroadRole.SERVER else self.response
+            message = self.request if self.role == HTTPBroadRole.SERVER else self.response
 
-        if message is None:
-            raise HTTPError(502, "The stream ended without a complete message.")
+            if message is None:
+                raise HTTPError(502, "The stream ended without a complete message.")
 
-        message.body = bytes(self.buffer)
-        self.buffer.clear()
+            message.body = bytes(self.buffer)
+            self.buffer.clear()
 
-        if self.trailers is not None:
-            message.trailers = self.trailers
+            if self.trailers is not None:
+                message.trailers = self.trailers
 
-        self.verify(message)
-        self.absorb_encoding(message)
-        self.observe(message)
-        self.state = HTTPState.RECEIVED
+            self.verify(message)
+            self.absorb_encoding(message)
+            self.observe(message)
+            self.state = HTTPState.RECEIVED
 
-        if self.role != HTTPBroadRole.SERVER:
-            self.session.forget(self.id)
+            return message
 
-        return message
+        finally:
+            if self.role != HTTPBroadRole.SERVER:
+                self.session.forget(self.id)
 
     def absorb_encoding(self, message: HTTPMessage):
         if isinstance(message.body, bytes) and message.body and "Content-Encoding" in message.headers:
