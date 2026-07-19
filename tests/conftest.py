@@ -61,7 +61,8 @@ class Authority:
             "-keyout", self.ca_key, "-out", self.ca,
             "-subj", "/CN=Kaede Test CA", "-days", "1",
             "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign,cRLSign"
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+            "-addext", "subjectKeyIdentifier=hash"
         )
 
     def issue(self, name: str, hosts: str, *, days: int = 1, expired: bool = False):
@@ -76,7 +77,10 @@ class Authority:
         extensions = self.path(f"{name}.ext")
 
         with open(extensions, "w") as f:
-            f.write(f"subjectAltName={hosts}\nbasicConstraints=CA:FALSE\n")
+            f.write(
+                f"subjectAltName={hosts}\nbasicConstraints=CA:FALSE\n"
+                "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always,issuer\n"
+            )
 
         validity = ["-not_before", "20200101000000Z", "-not_after", "20200102000000Z"] if expired else ["-days", str(days)]
 
