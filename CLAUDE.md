@@ -207,6 +207,8 @@ When making changes to code or content, observe the following:
 - Maintain the structure and style of existing code, and use simple and reliable methods to implement features or fix issues with highly readable code.
 - Strive to ensure that each feature or module does not contain code specific to other features, modules, or common areas. If there is absolutely no way other than adding it, keep the added code to a minimum.
 - Carefully consider implementation methods. In particular, pay close attention to safety and reliability.
+- Keep the code of each protocol and each version symmetrical. For example, TCP and UDP must both be usable in the same way, and TCP-TLS, UDP-DTLS, and QUIC must all be usable in the same way. The server/client of each protocol and the implementation of each version must be symmetrical as well.
+    - The important characteristics of Kaede that must be maintained are that it has reached a practically usable level, that anyone can use any protocol easily and intuitively, and that the differences between versions/protocols are minimal or nonexistent.
 - It must be possible for humans to understand the changes completely and without misunderstanding. Provide detailed work logs in a prominent form at a medium frequency during work.
 - When implementing new features, add as many high-quality and detailed tests as possible to the automated tests. When adding, strictly observe the rules for expanding test items.
 - Always run tests after completing work. Execute automated tests with pytest or the steps in the "Testing by Claude" section. It is strongly recommended to perform manual testing compliant with the "Testing by Claude" section in addition to automated tests.
