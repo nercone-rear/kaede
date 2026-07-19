@@ -518,17 +518,28 @@ class NSEC3RecordData(DNSRecordData):
             types=Bitmap.unpack(raw[cut + 1 + raw[cut]:])
         )
 
+    @staticmethod
+    def encode32(data: bytes) -> str:
+        # RFC 4648 section 7: Base32hex, the "extended hex" alphabet. base64.b32hexencode only exists on 3.10+.
+        swap = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567", "0123456789ABCDEFGHIJKLMNOPQRSTUV")
+
+        return base64.b32encode(data).decode().translate(swap).rstrip("=")
+
+    @staticmethod
+    def decode32(text: str) -> bytes:
+        swap = str.maketrans("0123456789ABCDEFGHIJKLMNOPQRSTUV", "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+
+        return base64.b32decode(text.upper().translate(swap) + "=" * (-len(text) % 8))
+
     @classmethod
     def from_text(cls, tokens):
         # RFC 5155 section 3.3: the next hashed owner is unpadded Base32hex.
-        hashed = tokens[4] + "=" * (-len(tokens[4]) % 8)
-
         return cls(
             algorithm=int(tokens[0]),
             flags=int(tokens[1]),
             iterations=int(tokens[2]),
             salt=b"" if tokens[3] == "-" else bytes.fromhex(tokens[3]),
-            next_hashed=base64.b32hexdecode(hashed, casefold=True),
+            next_hashed=cls.decode32(tokens[4]),
             types=tuple(DNSRecordType.from_name(token) for token in tokens[5:])
         )
 
@@ -536,8 +547,7 @@ class NSEC3RecordData(DNSRecordData):
     def text(self) -> str:
         # RFC 5155 section 3.3: an empty salt is a "-"; the next hashed owner is unpadded Base32hex.
         salt = self.salt.hex().upper() if self.salt else "-"
-        hashed = base64.b32hexencode(self.next_hashed).decode().rstrip("=")
-        parts = [str(self.algorithm), str(self.flags), str(self.iterations), salt, hashed]
+        parts = [str(self.algorithm), str(self.flags), str(self.iterations), salt, NSEC3RecordData.encode32(self.next_hashed)]
 
         return " ".join(parts + [DNSRecordType.mnemonic(rtype) for rtype in self.types])
 

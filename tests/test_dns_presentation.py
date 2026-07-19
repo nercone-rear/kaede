@@ -12,6 +12,12 @@ from kaede.dns.records import (
 # already used by its A/MX/DS/TLSA renderers: names carry no trailing root dot and
 # hexadecimal/Base32hex fields are upper-cased (both are case-insensitive per the RFCs).
 
+def base32hex(text: str) -> bytes:
+    # Base32hex (RFC 4648 section 7) decode, independent of base64.b32hexdecode which is 3.10+.
+    swap = str.maketrans("0123456789ABCDEFGHIJKLMNOPQRSTUV", "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+
+    return base64.b32decode(text.upper().translate(swap) + "=" * (-len(text) % 8))
+
 class TestRRSIG:
     # RFC 5702 section 6.1 prints this A-covering RSA/SHA-256 signature.
     SIGNATURE = "kRCOH6u7l0QGy9qpC9l1sLncJcOKFLJ7GhiUOibu4teYp5VE9RncriShZNz85mwlMgNEacFYK/lPtPiVYP4bwg=="
@@ -59,7 +65,7 @@ class TestNSEC3:
         # RFC 5155 section 7.3 / Appendix B example.
         return NSEC3RecordData(
             algorithm=1, flags=1, iterations=12, salt=bytes.fromhex("aabbccdd"),
-            next_hashed=base64.b32hexdecode("2T7B4G4VSA5SMI47K61MV5BV1A22BOJR"),
+            next_hashed=base32hex("2T7B4G4VSA5SMI47K61MV5BV1A22BOJR"),
             types=(DNSRecordType.MX, DNSRecordType.DNSKEY, DNSRecordType.NS,
                    DNSRecordType.SOA, DNSRecordType.NSEC3PARAM, DNSRecordType.RRSIG)
         )
