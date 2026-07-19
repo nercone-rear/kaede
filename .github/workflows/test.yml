@@ -264,6 +264,7 @@ jobs:
           echo "Using OpenSSL lib dir: ${LIBDIR}"
           test -d "${LIBDIR}" || { echo "lib directory not found: ${LIBDIR}"; exit 1; }
           echo "KAEDE_OPENSSL=${LIBDIR}" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=${LIBDIR}" >> $GITHUB_ENV
 
           OPENSSLCONF="${INSTALLDIR}/ssl/openssl.cnf"
           test -f "${OPENSSLCONF}" || { echo "openssl.cnf not found: ${OPENSSLCONF}"; exit 1; }
