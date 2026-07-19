@@ -148,7 +148,90 @@ jobs:
       - name: Run tests
         run: uv run pytest --tb=short -v
 
+  fetch-openssl-3-macos:
+    runs-on: macos-latest
+
+    outputs:
+      version: ${{ steps.openssl-version.outputs.version }}
+      cache-key: ${{ steps.openssl-version.outputs.cache-key }}
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Resolve latest OpenSSL 3.x version
+        id: openssl-version
+        run: |
+          VERSION=$(gh api repos/nercone-rear/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-3\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
+          echo "Resolved OpenSSL ${VERSION}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-${{ runner.arch }}-v1" >> $GITHUB_OUTPUT
+
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v4
+        with:
+          path: ~/openssl-3
+          key: ${{ steps.openssl-version.outputs.cache-key }}
+
+      - name: Download OpenSSL ${{ steps.openssl-version.outputs.version }}
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.openssl-version.outputs.version }}"
+          ARCH="$(uname -m)"
+          [ "${ARCH}" = "arm64" ] && ARCH="aarch64"
+          ASSET="openssl-${VERSION}-darwin-${ARCH}.tar.gz"
+          BASE_URL="https://github.com/nercone-rear/openssl/releases/download/openssl-${VERSION}"
+          curl -fsSL -o "${ASSET}" "${BASE_URL}/${ASSET}"
+          curl -fsSL -o SHA256SUMS "${BASE_URL}/SHA256SUMS"
+          grep " ${ASSET}\$" SHA256SUMS | shasum -a 256 -c -
+          mkdir -p "$HOME/openssl-3"
+          tar -xzf "${ASSET}" -C "$HOME/openssl-3" --strip-components=1
+
+  fetch-openssl-4-macos:
+    runs-on: macos-latest
+
+    outputs:
+      version: ${{ steps.openssl-version.outputs.version }}
+      cache-key: ${{ steps.openssl-version.outputs.cache-key }}
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Resolve latest OpenSSL 4.x version
+        id: openssl-version
+        run: |
+          VERSION=$(gh api repos/nercone-rear/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-4\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
+          echo "Resolved OpenSSL ${VERSION}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-${{ runner.arch }}-v1" >> $GITHUB_OUTPUT
+
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v4
+        with:
+          path: ~/openssl-4
+          key: ${{ steps.openssl-version.outputs.cache-key }}
+
+      - name: Download OpenSSL ${{ steps.openssl-version.outputs.version }}
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.openssl-version.outputs.version }}"
+          ARCH="$(uname -m)"
+          [ "${ARCH}" = "arm64" ] && ARCH="aarch64"
+          ASSET="openssl-${VERSION}-darwin-${ARCH}.tar.gz"
+          BASE_URL="https://github.com/nercone-rear/openssl/releases/download/openssl-${VERSION}"
+          curl -fsSL -o "${ASSET}" "${BASE_URL}/${ASSET}"
+          curl -fsSL -o SHA256SUMS "${BASE_URL}/SHA256SUMS"
+          grep " ${ASSET}\$" SHA256SUMS | shasum -a 256 -c -
+          mkdir -p "$HOME/openssl-4"
+          tar -xzf "${ASSET}" -C "$HOME/openssl-4" --strip-components=1
+
   test-macos:
+    needs: [fetch-openssl-3-macos, fetch-openssl-4-macos]
     runs-on: macos-latest
     strategy:
       matrix:
@@ -158,15 +241,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install OpenSSL via Homebrew
-        run: brew install openssl@${{ matrix.openssl-version }}
+      - name: Restore OpenSSL 3 cache
+        if: matrix.openssl-version == 3
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/openssl-3
+          key: ${{ needs.fetch-openssl-3-macos.outputs.cache-key }}
+          fail-on-cache-miss: true
 
-      - name: Set KAEDE_OPENSSL
+      - name: Restore OpenSSL 4 cache
+        if: matrix.openssl-version == 4
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/openssl-4
+          key: ${{ needs.fetch-openssl-4-macos.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Register OpenSSL and Set KAEDE_OPENSSL
         run: |
-          LIBDIR="$(brew --prefix openssl@${{ matrix.openssl-version }})/lib"
+          INSTALLDIR="$HOME/openssl-${{ matrix.openssl-version }}"
+          LIBDIR="${INSTALLDIR}/lib"
           echo "Using OpenSSL lib dir: ${LIBDIR}"
           test -d "${LIBDIR}" || { echo "lib directory not found: ${LIBDIR}"; exit 1; }
           echo "KAEDE_OPENSSL=${LIBDIR}" >> $GITHUB_ENV
+
+          OPENSSLCONF="${INSTALLDIR}/ssl/openssl.cnf"
+          test -f "${OPENSSLCONF}" || { echo "openssl.cnf not found: ${OPENSSLCONF}"; exit 1; }
+          echo "OPENSSL_CONF=${OPENSSLCONF}" >> $GITHUB_ENV
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
