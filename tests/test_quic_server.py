@@ -6,7 +6,7 @@ import pytest
 from kaede.tls import TLSConfig
 from kaede.tls.errors import TLSConfigError
 from kaede.udp.models import UDPPort
-from kaede.quic import QUICClient, QUICClientConfig, QUICServer, QUICServerConfig, QUICHandler
+from kaede.quic import QUICClient, QUICClientConfig, QUICServer, QUICServerConfig, QUICServerLimits, QUICHandler
 from kaede.quic.tls import QTLS
 from kaede.quic.errors import QUICError, QUICTimeoutError
 
@@ -291,3 +291,48 @@ class TestConfiguration:
         # RFC 9000 section 8.1: making a peer prove its address before serving
         # it is what keeps the server from amplifying a forged one.
         assert QUICServerConfig().validate is True
+
+async def hold(connection):
+    """Accept every stream, echo one message, and keep the stream open (never conclude it),
+    so each stays counted against the per-connection concurrent limit."""
+    kept = []
+
+    while True:
+        stream = await connection.accept()
+        kept.append(stream)
+
+        data = await stream.receive(timeout=10)
+        await stream.send(data)
+
+class TestStreamLimit:
+    async def test_admits_streams_up_to_the_cap(self, server_certificate, authority):
+        # RFC 9000 section 4.6: a connection caps the number of concurrent peer-opened streams.
+        async with Running(hold, server_certificate, limits=QUICServerLimits(max_stream_nums=2)) as server:
+            async with client(server, authority) as connection:
+                for _ in range(2):
+                    stream = await connection.open()
+                    await stream.send(b"x")
+                    stream.conclude()
+
+                    assert await stream.receive(timeout=10) == b"x"
+
+    async def test_refuses_a_stream_past_the_cap(self, server_certificate, authority):
+        # The third concurrent stream is over the cap of two, so the server resets it rather than serving it.
+        async with Running(hold, server_certificate, limits=QUICServerLimits(max_stream_nums=2)) as server:
+            async with client(server, authority) as connection:
+                live = []
+
+                for _ in range(2):
+                    stream = await connection.open()
+                    await stream.send(b"x")
+                    stream.conclude()
+
+                    assert await stream.receive(timeout=10) == b"x"
+                    live.append(stream)
+
+                extra = await connection.open()
+                await extra.send(b"x")
+                extra.conclude()
+
+                with pytest.raises(QUICError):
+                    await extra.receive(timeout=10)

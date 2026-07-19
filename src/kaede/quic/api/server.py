@@ -325,6 +325,8 @@ class QUICServer:
 
     async def dispatch(self, connection: QUICConnection):
         try:
+            connection.max_streams = self.config.limits.max_stream_nums
+
             await connection.handshake(self.config.handshake_timeout)
 
             if self.handler is not None and self.handler.on_connection is not None:

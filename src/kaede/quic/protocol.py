@@ -398,6 +398,7 @@ class QUICConnection:
         self.dst = dst or ("", UDPPort(0))
 
         self.streams: Dict[int, "QUICStream"] = {}
+        self.max_streams: Optional[int] = None # the per-connection cap on concurrent remote-initiated bidirectional streams
 
         self.established = False
         self.closed = False
@@ -597,7 +598,17 @@ class QUICConnection:
             pointer = self.qtls.accept_stream(self.pointer, Stream.ACCEPT_NO_BLOCK)
 
             if pointer:
-                return self.adopt(pointer)
+                self.prune()
+                stream = self.adopt(pointer)
+
+                # RFC 9000 section 4.6 caps concurrent peer-opened bidirectional streams. OpenSSL exposes no
+                # setter for initial_max_streams_bidi, so one past the cap is refused rather than admitted.
+                if self.overflowing(stream):
+                    stream.reset()
+                    self.forget(stream)
+                    continue
+
+                return stream
 
             await self.endpoint.tick(timeout)
 
@@ -606,6 +617,18 @@ class QUICConnection:
         self.streams[int(stream.id)] = stream
 
         return stream
+
+    def prune(self):
+        for stream in [stream for stream in self.streams.values() if stream.spent]:
+            self.forget(stream)
+
+    def overflowing(self, stream: "QUICStream") -> bool:
+        if self.max_streams is None or stream.local or not (stream.readable and stream.writable):
+            return False
+
+        opened = sum(1 for other in self.streams.values() if not other.local and other.readable and other.writable)
+
+        return opened > self.max_streams
 
     def check(self):
         if self.pointer is None:
@@ -699,6 +722,12 @@ class QUICStream:
             return True
 
         return not self.buffer and self.qtls.read_state(self.pointer) == Stream.STATE_FINISHED
+
+    @property
+    def spent(self) -> bool:
+        # A stream is done once we have stopped sending on it and have drained everything the peer sent, so the
+        # connection may forget it. Both halves are then closed, so its buffered send data is already with the peer.
+        return self.pointer is None or (self.concluded and self.finished)
 
     async def send(self, data: bytes):
         if self.pointer is None:
