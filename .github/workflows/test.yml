@@ -23,7 +23,7 @@ jobs:
           VERSION=$(gh api repos/openssl/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-3\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
           echo "Resolved OpenSSL ${VERSION}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v3" >> $GITHUB_OUTPUT
+          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v4" >> $GITHUB_OUTPUT
 
       - name: Cache OpenSSL build
         id: cache-openssl
@@ -62,7 +62,7 @@ jobs:
           VERSION=$(gh api repos/openssl/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-4\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
           echo "Resolved OpenSSL ${VERSION}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v3" >> $GITHUB_OUTPUT
+          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v4" >> $GITHUB_OUTPUT
 
       - name: Cache OpenSSL build
         id: cache-openssl
