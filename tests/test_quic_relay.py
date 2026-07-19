@@ -41,11 +41,17 @@ class Gone:
     def __init__(self, dst):
         self.dst = dst
 
-def endpoint(certificate, relay=None) -> QUICServerEndpoint:
+def context(certificate) -> QUICContext:
     certfile, keyfile = certificate
-    context = QUICContext(TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE), server=True, alpn=["kaede/1"])
 
-    return QUICServerEndpoint(context, relay=relay)
+    return QUICContext(TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE), server=True, alpn=["kaede/1"])
+
+def endpoint(certificate, relay=None) -> QUICServerEndpoint:
+    # A worker only learns the identifiers it hands out so a relay can route a
+    # peer that moved to the sibling that owns it. A lone server (no relay) owns
+    # its socket outright and never needs the table, so learning is off there;
+    # every test that exercises learning is therefore a relayed worker.
+    return QUICServerEndpoint(context(certificate), relay=relay or Recording())
 
 def initial(destination=b"\x01\x02\x03\x04\x05\x06\x07\x08"):
     """A client's first packet: a long header of type Initial."""
@@ -64,6 +70,13 @@ def spoken(destination, source):
     """What a server sends back: a long header naming its own id as the source."""
 
     return (bytes([0x80 | 0x40 | (QUICPacket.HANDSHAKE << 4)]) + (1).to_bytes(4, "big")
+            + bytes([len(destination)]) + destination
+            + bytes([len(source)]) + source + b"payload")
+
+def retry(destination, source):
+    """A server's Retry: a long header of type Retry naming its own source id."""
+
+    return (bytes([0x80 | 0x40 | (QUICPacket.RETRY << 4)]) + (1).to_bytes(4, "big")
             + bytes([len(destination)]) + destination
             + bytes([len(source)]) + source + b"payload")
 
@@ -97,6 +110,28 @@ class TestLearning:
         one.learn(spoken(b"\xbb", b"\x22" * 8), PEER)
 
         assert set(one.identifiers) == {b"\x11" * 8, b"\x22" * 8}
+
+    def test_a_lone_server_learns_nothing(self, server_certificate):
+        # A server with no siblings never reads the identifier table (owns()
+        # short-circuits), so it must not accumulate one packet by packet over
+        # the life of the process.
+        one = QUICServerEndpoint(context(server_certificate))
+        one.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
+
+        assert one.identifiers == {}
+        assert one.lengths == set()
+
+    def test_learns_nothing_from_a_retry(self, server_certificate):
+        # A Retry names a server-chosen source id that the client only echoes in
+        # its next Initial, which every worker takes locally, so the id is never
+        # needed for routing. Remembering it would let an address-spoofing flood
+        # grow the table without bound, since such handshakes never establish a
+        # connection whose teardown would drop the id again.
+        one = endpoint(server_certificate)
+        one.learn(retry(b"\xaa", b"\x11" * 8), PEER)
+
+        assert one.identifiers == {}
+        assert one.lengths == set()
 
 class TestRecognition:
     def test_recognises_a_short_header_naming_its_own_id(self, server_certificate):
@@ -156,7 +191,7 @@ class TestForgetting:
 class TestRouting:
     def test_takes_everything_when_there_are_no_siblings(self, server_certificate):
         # A server on its own owns its socket outright.
-        one = endpoint(server_certificate)
+        one = QUICServerEndpoint(context(server_certificate))
 
         assert one.owns(short(b"\x99" * 8), (LOCAL, 1))
         assert one.owns(initial(), (LOCAL, 1))

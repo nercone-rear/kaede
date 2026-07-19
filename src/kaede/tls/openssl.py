@@ -392,15 +392,15 @@ class OpenSSL:
 
 class TLSContext:
     def __init__(self, config: Optional[TLSConfig] = None, *, server: bool = False, alpn: Optional[List[str]] = None, datagram: bool = False, cookies: Optional[Cookies] = None, library: Optional[OpenSSL] = None):
+        self.pointer = None
+        self.callbacks: List = []
+
         self.config = config or TLSConfig()
         self.server = server
         self.alpn = alpn
         self.datagram = datagram
         self.cookies = cookies
         self.library = library or OpenSSL()
-
-        self.pointer = None
-        self.callbacks: List = []
 
         self.build()
 
@@ -681,6 +681,9 @@ class TLSSession:
     link_mtu = 1280
 
     def __init__(self, context: TLSContext, *, hostname: Optional[str] = None):
+        self.pointer = None
+        self.address = None
+
         self.context = context
         self.library = context.library
         self.server = context.server
@@ -691,8 +694,6 @@ class TLSSession:
         self.closed = False
         self.ended = False
         self.truncated = False
-
-        self.address = None
 
         self.pointer = self.library.new(context.pointer)
 

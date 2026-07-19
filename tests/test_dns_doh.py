@@ -115,6 +115,24 @@ class TestDoH:
 
                 assert response.status_code == 415
 
+    async def test_a_malformed_dns_parameter_is_refused(self, server_certificate, authority):
+        from kaede.http.api.client import HTTPClient, HTTPClientConfig
+
+        async with Running(server_certificate) as server:
+            host, port = server.ports[0]
+
+            config = HTTPClientConfig(versions=["HTTP/1.1"])
+            config.tls = TLSConfig(cafile=authority.ca)
+
+            async with HTTPClient(config=config) as http:
+                # "AAAAA" is base64url alphabet but an impossible length (one
+                # more than a multiple of four). RFC 8484 section 4.1 wants a
+                # 400, not the 500 an unhandled binascii.Error would produce.
+                connection = await http.get(f"https://localhost:{int(port.value)}/dns-query?dns=AAAAA")
+                response = await connection.receive()
+
+                assert response.status_code == 400
+
 class TestServerBridge:
     """DNSServer serves DoH through the same DNSHandler as the other transports (RFC 8484)."""
 

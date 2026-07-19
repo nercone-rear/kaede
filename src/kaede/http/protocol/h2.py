@@ -339,6 +339,11 @@ class H2Session:
             raise H2StreamError(Code.STREAM_CLOSED, frame.stream, "A DATA frame arrived after END_STREAM.")
 
         body = self.strip(frame)
+
+        if stream.counted + len(body) > self.limits.max_message_body_size:
+            await self.replenish(0, len(frame.payload))
+            raise H2StreamError(Code.ENHANCE_YOUR_CALM, frame.stream, "The message body is larger than allowed.")
+
         stream.feed(body)
         await self.replenish(frame.stream, len(frame.payload))
 
@@ -726,6 +731,9 @@ class H2Connection(HTTPConnection):
 
                 if name in pseudo:
                     raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The pseudo-header {name} is repeated.")
+
+                if any(ord(character) == 0x7F or ord(character) < 0x20 for character in value):
+                    raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The pseudo-header {name} carries a control character.")
 
                 pseudo[name] = value
                 continue

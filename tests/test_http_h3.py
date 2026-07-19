@@ -6,12 +6,13 @@ import pytest
 from kaede.tls import TLSConfig
 from kaede.udp import UDPPort
 from kaede.quic.tls import QTLS
-from kaede.http.models import HTTPPort, HTTPHeaders, HTTPResponse
+from kaede.http.models import HTTPPort, HTTPHeaders, HTTPResponse, HTTPBroadRole
 from kaede.http.responses import JSONResponse
 from kaede.http.errors import HTTPError
 from kaede.http.finalizer import finalize_response
 from kaede.http.api.server import HTTPServer, HTTPServerConfig, HTTPHandler
 from kaede.http.api.client import HTTPClient, HTTPClientConfig
+from kaede.http.protocol.h3 import H3Connection, H3Error
 
 LOCAL = "127.0.0.1"
 
@@ -108,6 +109,36 @@ class TestExchange:
                 response = await (await http.get(endpoint(server) + "/big")).receive()
 
                 assert response.body == payload
+
+class Stub:
+    """The little a header block needs from its session to be split apart."""
+
+    connection = None
+    limits = None
+    observer = None
+
+class TestPseudoHeaders:
+    # RFC 9114 section 4.1.2 (inheriting RFC 9113 section 8.2.1): a field value
+    # carrying NUL, CR, or LF makes the message malformed. Regular header values
+    # are cleaned by HTTPHeaders, but pseudo-header values (:method, :path, ...)
+    # are consumed directly, so a control character in :path would otherwise be
+    # a request-splitting or log-injection primitive once reused downstream.
+
+    def connection(self) -> H3Connection:
+        return H3Connection(Stub(), 0, role=HTTPBroadRole.SERVER)
+
+    @pytest.mark.parametrize("value", ["/x\r\nx-injected: 1", "/x\nfoo", "/x\rfoo", "/x\x00", "\x7f"])
+    def test_a_control_character_in_a_pseudo_header_is_rejected(self, value):
+        fields = [(":method", "GET"), (":scheme", "https"), (":authority", "example.com"), (":path", value)]
+
+        with pytest.raises(H3Error):
+            self.connection().split(fields, trailer=False)
+
+    def test_a_clean_path_is_accepted(self):
+        fields = [(":method", "GET"), (":scheme", "https"), (":authority", "example.com"), (":path", "/ok")]
+        pseudo, _ = self.connection().split(fields, trailer=False)
+
+        assert pseudo[":path"] == "/ok"
 
 class TestErrors:
     async def test_a_handler_error_becomes_a_response(self, server_certificate, authority):

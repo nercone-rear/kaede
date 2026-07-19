@@ -99,7 +99,11 @@ class DNSHTTPSHandler:
             if not encoded:
                 raise HTTPError(400, "Bad Request")
 
-            return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+            try:
+                return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+
+            except (ValueError, TypeError):
+                raise HTTPError(400, "Bad Request")
 
         raise HTTPError(405, "Method Not Allowed")
 

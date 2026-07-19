@@ -214,9 +214,12 @@ class QUICServerEndpoint(QUICEndpoint):
         return self.owner.accept(connection) if self.owner is not None else True
 
     def learn(self, data: bytes, address: Tuple[str, int]):
+        if self.relay is None:
+            return
+
         packet = QUICPacket.read(data)
 
-        if packet is not None and packet.long and packet.source:
+        if packet is not None and packet.long and packet.source and packet.kind != QUICPacket.RETRY:
             self.identifiers[packet.source] = address
             self.lengths.add(len(packet.source))
 
