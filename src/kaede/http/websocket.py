@@ -10,8 +10,6 @@ from ..uds.errors import UDSError, UDSClosedError, UDSLostError
 from ..tls.errors import TLSError
 from .errors import WebSocketError
 
-GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
 class Opcode:
     CONTINUATION = 0x0
     TEXT         = 0x1
@@ -53,9 +51,11 @@ class Close:
         return raw
 
 class WSFrame:
+    GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
     @staticmethod
     def accept(key: str) -> str:
-        return b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
+        return b64encode(hashlib.sha1((key + WSFrame.GUID).encode()).digest()).decode()
 
     @staticmethod
     def build(opcode: int, payload: bytes, *, fin: bool = True, mask: bool = False) -> bytes:
