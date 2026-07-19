@@ -2,7 +2,7 @@ import asyncio
 from typing import Optional, List, Tuple
 
 from ..tls.models import TLSConfig
-from ..tls.openssl import TLSContext, TLSSession
+from ..tls.openssl import TLSContext, TLSSession, Cookies
 from ..tls.errors import TLSError, TLSHandshakeError
 from .models import UDPPort
 from .errors import UDPConnectionError, UDPClosedError, UDPTimeoutError, UDPLimitError
@@ -64,7 +64,7 @@ class DTLSConnection:
 
     @staticmethod
     async def accept(transport: UDPConnection, config: Optional[TLSConfig] = None, *, alpn: Optional[List[str]] = None, timeout: Optional[float] = None, context: Optional[TLSContext] = None) -> "DTLSConnection":
-        context = context or TLSContext(config or TLSConfig(), server=True, alpn=alpn, datagram=True)
+        context = context or TLSContext(config or TLSConfig(), server=True, alpn=alpn, datagram=True, cookies=Cookies())
         connection = DTLSConnection(transport, context.session(), context)
 
         await connection.handshake(timeout)

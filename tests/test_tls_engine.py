@@ -324,3 +324,127 @@ class TestALPN:
         assert pump(client, server)
 
         assert client.protocol is None
+
+class TestClientCertificatePolicy:
+    def test_the_default_verify_mode_depends_on_the_role(self):
+        # RFC 8446 4.3.2: client authentication is optional. The safe default is
+        # a client that checks the server and a server that does not demand a
+        # certificate from the client.
+        config = TLSConfig()
+
+        assert config.verification(server=False) == CERT_REQUIRED
+        assert config.verification(server=True) == CERT_NONE
+
+    def test_a_default_server_does_not_demand_a_client_certificate(self, library, server_certificate, authority):
+        certfile, keyfile = server_certificate
+
+        server_context = TLSContext(TLSConfig(certfile=certfile, keyfile=keyfile), server=True, library=library)
+        client_context = TLSContext(TLSConfig(cafile=authority.ca), library=library)
+
+        client, server = client_context.session(hostname="localhost"), server_context.session()
+
+        assert pump(client, server)
+        assert client.established and server.established
+
+    def test_a_server_can_still_require_a_client_certificate(self, library, server_certificate, authority):
+        # An explicit CERT_REQUIRED is mutual TLS, so a client that offers no
+        # certificate has to be turned away.
+        certfile, keyfile = server_certificate
+
+        server_context = TLSContext(TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_REQUIRED, cafile=authority.ca), server=True, library=library)
+        client_context = TLSContext(TLSConfig(cafile=authority.ca), library=library)
+
+        client, server = client_context.session(hostname="localhost"), server_context.session()
+
+        with pytest.raises(TLSHandshakeError):
+            pump(client, server)
+
+class TestHostnameRequirement:
+    def test_a_verifying_client_without_a_hostname_is_refused(self, library):
+        # RFC 8446 4.4.2: with no name to check the certificate against, a
+        # verifying client would accept any certificate a trusted CA signed.
+        context = TLSContext(TLSConfig(), library=library)
+
+        with pytest.raises(TLSConfigError):
+            context.session()
+
+    def test_an_unverified_client_may_omit_the_hostname(self, library):
+        context = TLSContext(TLSConfig(verify_mode=CERT_NONE), library=library)
+
+        assert context.session().pointer
+
+class TestServerName:
+    def test_a_trailing_dot_is_stripped_from_the_servername(self, library, server_certificate, authority):
+        # RFC 6066 3: the SNI host_name is carried without a trailing dot, and
+        # the certificate check must succeed all the same.
+        client, server, _ = pair(library, server_certificate, ca=authority.ca, hostname="localhost.")
+
+        assert pump(client, server)
+        assert server.servername == "localhost"
+
+    def test_ascii_names_pass_through_unchanged(self):
+        assert TLSSession.identity("example.com") == b"example.com"
+
+    def test_an_internationalized_name_becomes_its_a_label(self):
+        # RFC 6066 3 / RFC 5890: an IDN travels as its ASCII A-label (punycode).
+        assert TLSSession.identity("bücher.example") == b"xn--bcher-kva.example"
+
+    def test_an_ip_literal_passes_through(self):
+        assert TLSSession.identity("192.0.2.1") == b"192.0.2.1"
+
+class TestClosure:
+    def test_a_clean_close_is_not_flagged_as_truncated(self, library, server_certificate, authority):
+        client, server, _ = pair(library, server_certificate, ca=authority.ca)
+        assert pump(client, server)
+
+        server.unwrap()
+        client.feed(server.drain())
+
+        assert client.read() == b""
+        assert client.closed and not client.truncated
+
+    def test_a_transport_end_without_close_notify_is_truncation(self, library, server_certificate, authority):
+        # RFC 8446 6.1: a transport that ends before close_notify means the data
+        # may have been cut short, which must be distinguishable from a clean end.
+        client, server, _ = pair(library, server_certificate, ca=authority.ca)
+        assert pump(client, server)
+
+        client.eof()  # the peer vanished: no more bytes, and no close_notify
+
+        assert client.read() == b""
+        assert client.closed and client.truncated
+
+class TestCipherCatalogue:
+    def test_no_anonymous_or_null_suite_is_offered(self):
+        # A secure-transport library must expose no suite that authenticates no
+        # one (ADH/AECDH) or encrypts nothing (NULL).
+        for cipher in TLSCipher:
+            name = cipher.value.upper()
+
+            assert not name.startswith(("ADH-", "AECDH-")), name
+            assert "NULL" not in name, name
+
+    def test_an_anonymous_suite_cannot_be_resolved_by_name(self):
+        with pytest.raises(KeyError):
+            TLSCipher.from_name("ADH-AES128-SHA")
+
+    def test_the_server_cipher_preference_decides_in_tls_1_2(self, library, server_certificate, authority):
+        # RFC 9325 recommends the server, not the client, decides the cipher. The
+        # two ends list the same two suites in opposite orders, so only the
+        # server's order being honoured explains the outcome.
+        certfile, keyfile = server_certificate
+
+        client_config = TLSConfig(cafile=authority.ca, minimum_version=TLSVersion.TLSv1_2)
+        client_config.ciphers = [TLSCipher.ECDHE_RSA_AES128_GCM_SHA256, TLSCipher.ECDHE_RSA_AES256_GCM_SHA384]
+
+        server_config = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, minimum_version=TLSVersion.TLSv1_2)
+        server_config.ciphers = [TLSCipher.ECDHE_RSA_AES256_GCM_SHA384, TLSCipher.ECDHE_RSA_AES128_GCM_SHA256]
+
+        client_context = TLSContext(client_config, server=False, library=library)
+        server_context = TLSContext(server_config, server=True, library=library)
+
+        client, server = client_context.session(hostname="localhost"), server_context.session()
+        assert pump(client, server)
+
+        assert client.version == "TLSv1.2"
+        assert client.cipher == "ECDHE-RSA-AES256-GCM-SHA384"

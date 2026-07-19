@@ -52,6 +52,10 @@ class TLSConnection:
     def verified(self) -> bool:
         return self.session.verified
 
+    @property
+    def truncated(self) -> bool:
+        return self.session.truncated
+
     @staticmethod
     async def connect(transport: TCPConnection, config: Optional[TLSConfig] = None, *, hostname: Optional[str] = None, alpn: Optional[List[str]] = None, timeout: Optional[float] = None, context: Optional[TLSContext] = None) -> "TLSConnection":
         context = context or TLSContext(config or TLSConfig(), server=False, alpn=alpn)
@@ -212,7 +216,8 @@ class TLSConnection:
             await self.flush()
 
             if not await self.fill():
-                return b""
+                self.session.eof()
+                return self.session.read()
 
     def take(self, n: int) -> bytes:
         data = bytes(self.buffer[:n])

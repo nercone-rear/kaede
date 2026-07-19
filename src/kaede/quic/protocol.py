@@ -6,8 +6,8 @@ from typing import Optional, List, Dict, Deque, Tuple
 from collections import deque
 
 from ..tls.models import TLSConfig
-from ..tls.openssl import VOID_P, Control, Timeval, Result, Certificate
-from ..tls.errors import TLSHandshakeError, TLSVerificationError
+from ..tls.openssl import VOID_P, Control, Timeval, Result, Certificate, TLSSession
+from ..tls.errors import TLSConfigError, TLSHandshakeError, TLSVerificationError
 from ..udp.models import UDPPort
 from ..udp.errors import UDPError
 from ..udp.protocol import UDPConnection, UDPProtocol
@@ -451,14 +451,26 @@ class QUICConnection:
         return self.library.get_verify(self.pointer) == 0
 
     def prepare(self, hostname: Optional[str] = None):
-        if not hostname:
+        context = self.endpoint.context
+        verify = context.config.verification(context.server)
+        host = hostname
+
+        if not host:
+            if verify != CERT_NONE:
+                raise TLSConfigError("A verifying QUIC client needs a hostname to check the certificate against. Pass a hostname, or set verify_mode to CERT_NONE to connect without checking identity.")
+
             return
 
-        if not hostname.replace(".", "").isdigit() and ":" not in hostname:
-            self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(hostname.encode()), VOID_P))
+        if host.endswith("."):
+            host = host[:-1]
 
-        if self.endpoint.context.config.verify_mode != CERT_NONE:
-            self.library.set_host(self.pointer, hostname.encode())
+        identity = TLSSession.identity(host)
+
+        if not host.replace(".", "").isdigit() and ":" not in host:
+            self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(identity), VOID_P))
+
+        if verify != CERT_NONE:
+            self.library.set_host(self.pointer, identity)
 
     @staticmethod
     async def connect(transport: UDPConnection, config: Optional[TLSConfig] = None, *, hostname: Optional[str] = None, alpn: Optional[List[str]] = None, timeout: Optional[float] = None, context: Optional[QUICContext] = None) -> "QUICConnection":

@@ -31,6 +31,8 @@ class Control:
     DTLS_GET_LINK_MIN_MTU = 121
     SET_MTU               = 17
 
+    SET_MEM_EOF_RETURN    = 130
+
 class Option:
     NO_COMPRESSION           = 0x00020000
     CIPHER_SERVER_PREFERENCE = 0x00400000
@@ -293,6 +295,7 @@ class OpenSSL:
         self.bio_write   = self.bind(self.crypto, "BIO_write", INT, [VOID_P, STR, INT])
         self.bio_read    = self.bind(self.crypto, "BIO_read", INT, [VOID_P, STR, INT])
         self.bio_pending = self.bind(self.crypto, "BIO_ctrl_pending", SIZE, [VOID_P])
+        self.bio_control = self.bind(self.crypto, "BIO_ctrl", LONG, [VOID_P, INT, LONG, VOID_P])
 
         # Certificates
         self.x509_free  = self.bind(self.crypto, "X509_free", VOID, [VOID_P])
@@ -425,6 +428,9 @@ class TLSContext:
         if self.datagram:
             options |= Option.NO_QUERY_MTU
 
+        if self.server:
+            options |= Option.CIPHER_SERVER_PREFERENCE
+
         library.context_options(self.pointer, options)
 
         self.apply_groups()
@@ -504,12 +510,13 @@ class TLSContext:
             self.library.context_ctrl(self.pointer, Control.SET_MIN_PROTO_VERSION, Protocol.number(TLSVersion.TLSv1_3), None)
 
     def apply_verification(self):
+        verify = self.config.verification(self.server)
         mode = Verify.NONE
 
-        if self.config.verify_mode != CERT_NONE:
+        if verify != CERT_NONE:
             mode = Verify.PEER
 
-            if self.server and self.config.verify_mode == CERT_REQUIRED:
+            if self.server and verify == CERT_REQUIRED:
                 mode |= Verify.FAIL_IF_NO_PEER_CERT
 
         self.library.context_verify(self.pointer, mode, None)
@@ -530,7 +537,7 @@ class TLSContext:
         if self.config.cadata is not None:
             self.apply_authorities()
 
-        if not (self.config.cafile or self.config.capath or self.config.cadata is not None) and self.config.verify_mode != CERT_NONE:
+        if not (self.config.cafile or self.config.capath or self.config.cadata is not None) and verify != CERT_NONE:
             if self.library.context_paths(self.pointer) != 1:
                 raise TLSConfigError(f"Could not load the default CA certificates: {self.library.reason()}")
 
@@ -682,6 +689,8 @@ class TLSSession:
 
         self.established = False
         self.closed = False
+        self.ended = False
+        self.truncated = False
 
         self.address = None
 
@@ -701,15 +710,36 @@ class TLSSession:
             self.prepare()
             self.library.connect_state(self.pointer)
 
+    @staticmethod
+    def identity(host: str) -> bytes:
+        try:
+            return host.encode("ascii")
+        except UnicodeEncodeError:
+            try:
+                return host.encode("idna")
+            except UnicodeError as error:
+                raise TLSConfigError(f"The hostname {host!r} is not a valid internationalized domain name: {error}")
+
     def prepare(self):
-        if not self.hostname:
+        verify = self.context.config.verification(self.server)
+        host = self.hostname
+
+        if not host:
+            if verify != CERT_NONE:
+                raise TLSConfigError("A verifying TLS client needs a hostname to check the certificate against. Pass a hostname, or set verify_mode to CERT_NONE to connect without checking identity.")
+
             return
 
-        if not self.hostname.replace(".", "").isdigit() and ":" not in self.hostname:
-            self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(self.hostname.encode()), VOID_P))
+        if host.endswith("."):
+            host = host[:-1]
 
-        if self.context.config.verify_mode != CERT_NONE:
-            self.library.set_host(self.pointer, self.hostname.encode())
+        identity = TLSSession.identity(host)
+
+        if not host.replace(".", "").isdigit() and ":" not in host:
+            self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(identity), VOID_P))
+
+        if verify != CERT_NONE:
+            self.library.set_host(self.pointer, identity)
 
     def feed(self, data: bytes):
         if not data:
@@ -797,6 +827,10 @@ class TLSSession:
 
         self.fail("The TLS handshake failed")
 
+    def eof(self):
+        self.ended = True
+        self.library.bio_control(self.incoming, Control.SET_MEM_EOF_RETURN, 0, None)
+
     def read(self, n: int = 16384) -> bytes:
         buffer = ctypes.create_string_buffer(n)
 
@@ -815,8 +849,9 @@ class TLSSession:
         if result in (Result.WANT_READ, Result.WANT_WRITE):
             return b""
 
-        if result == Result.SYSCALL and not self.library.drain():
+        if self.ended:
             self.closed = True
+            self.truncated = True
             return b""
 
         self.fail("The TLS session could not be read")
