@@ -31,7 +31,7 @@ Windowsへの対応は予定していません。
 KaedeのUDP/TLSモジュールを使用して実装します。
 
 ### HTTP
-KaedeのTCP/QUIC/UDS/TLSモジュールを使用して実装します。
+KaedeのUDS/TCP/QUIC/TLSモジュールを使用して実装します。
 
 ### SMTP
 KaedeのTCP/TLSモジュールを使用して実装します。
