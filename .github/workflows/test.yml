@@ -120,14 +120,19 @@ jobs:
 
       - name: Register OpenSSL and Set KAEDE_OPENSSL
         run: |
-          LIBDIR="$HOME/openssl-${{ matrix.openssl-version }}/lib64"
-          test -d "${LIBDIR}" || LIBDIR="$HOME/openssl-${{ matrix.openssl-version }}/lib"
+          INSTALLDIR="$HOME/openssl-${{ matrix.openssl-version }}"
+          LIBDIR="${INSTALLDIR}/lib64"
+          test -d "${LIBDIR}" || LIBDIR="${INSTALLDIR}/lib"
           echo "Using OpenSSL lib dir: ${LIBDIR}"
           test -d "${LIBDIR}" || { echo "lib directory not found: ${LIBDIR}"; exit 1; }
           echo "${LIBDIR}" | sudo tee /etc/ld.so.conf.d/openssl-kaede.conf
           sudo ldconfig
           echo "KAEDE_OPENSSL=${LIBDIR}" >> $GITHUB_ENV
           echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" >> $GITHUB_ENV
+
+          OPENSSLCONF="${INSTALLDIR}/ssl/openssl.cnf"
+          test -f "${OPENSSLCONF}" || { echo "openssl.cnf not found: ${OPENSSLCONF}"; exit 1; }
+          echo "OPENSSL_CONF=${OPENSSLCONF}" >> $GITHUB_ENV
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
