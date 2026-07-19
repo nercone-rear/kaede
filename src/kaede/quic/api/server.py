@@ -207,18 +207,22 @@ class QUICServerEndpoint(QUICEndpoint):
         self.owner = owner
         self.relay = relay
 
-        self.identifiers = set()
+        self.identifiers: Dict[bytes, Tuple[str, int]] = {}
         self.lengths = set()
 
     def arrive(self, connection: QUICConnection) -> bool:
         return self.owner.accept(connection) if self.owner is not None else True
 
-    def learn(self, data: bytes):
+    def learn(self, data: bytes, address: Tuple[str, int]):
         packet = QUICPacket.read(data)
 
         if packet is not None and packet.long and packet.source:
-            self.identifiers.add(packet.source)
+            self.identifiers[packet.source] = address
             self.lengths.add(len(packet.source))
+
+    def unlearn(self, connection: QUICConnection):
+        self.identifiers = {source: address for source, address in self.identifiers.items() if address != connection.dst}
+        self.lengths = {len(source) for source in self.identifiers}
 
     def mine(self, data: bytes) -> bool:
         packet = QUICPacket.read(data)

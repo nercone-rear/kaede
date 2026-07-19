@@ -12,6 +12,7 @@ from kaede.quic.protocol import QUICEndpoint, QUICConnection
 from kaede.quic.api.server import QUICRelay, QUICServerEndpoint
 
 LOCAL = "127.0.0.1"
+PEER = ("192.0.2.10", 4433)  # the peer a learned identifier was handed to
 
 # RFC 9000 section 5.1 routes a packet by the connection id it names, which is
 # what lets a connection outlive its peer's address changing. SO_REUSEPORT
@@ -33,6 +34,12 @@ class Recording:
 
     def spread(self, data, address):
         self.carried.append((data, address))
+
+class Gone:
+    """A torn-down connection, identified only by the address it answered."""
+
+    def __init__(self, dst):
+        self.dst = dst
 
 def endpoint(certificate, relay=None) -> QUICServerEndpoint:
     certfile, keyfile = certificate
@@ -65,7 +72,7 @@ class TestLearning:
         # RFC 9000 section 17.2: the source connection id of a long header is
         # the one this side is asking to be addressed by from now on.
         one = endpoint(server_certificate)
-        one.learn(spoken(b"\xaa\xbb", b"\x01\x02\x03\x04\x05\x06\x07\x08"))
+        one.learn(spoken(b"\xaa\xbb", b"\x01\x02\x03\x04\x05\x06\x07\x08"), PEER)
 
         assert b"\x01\x02\x03\x04\x05\x06\x07\x08" in one.identifiers
         assert one.lengths == {8}
@@ -73,40 +80,40 @@ class TestLearning:
     def test_learns_nothing_from_a_short_header(self, server_certificate):
         # A short header states no source id at all.
         one = endpoint(server_certificate)
-        one.learn(short(b"\x01\x02\x03\x04\x05\x06\x07\x08"))
+        one.learn(short(b"\x01\x02\x03\x04\x05\x06\x07\x08"), PEER)
 
-        assert one.identifiers == set()
+        assert one.identifiers == {}
 
     def test_learns_nothing_from_a_sourceless_long_header(self, server_certificate):
         one = endpoint(server_certificate)
-        one.learn(onward(b"\xaa\xbb"))
+        one.learn(onward(b"\xaa\xbb"), PEER)
 
-        assert one.identifiers == set()
+        assert one.identifiers == {}
 
     def test_learns_more_than_one(self, server_certificate):
         one = endpoint(server_certificate)
 
-        one.learn(spoken(b"\xaa", b"\x11" * 8))
-        one.learn(spoken(b"\xbb", b"\x22" * 8))
+        one.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
+        one.learn(spoken(b"\xbb", b"\x22" * 8), PEER)
 
-        assert one.identifiers == {b"\x11" * 8, b"\x22" * 8}
+        assert set(one.identifiers) == {b"\x11" * 8, b"\x22" * 8}
 
 class TestRecognition:
     def test_recognises_a_short_header_naming_its_own_id(self, server_certificate):
         one = endpoint(server_certificate)
-        one.learn(spoken(b"\xaa", b"\x11" * 8))
+        one.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
 
         assert one.mine(short(b"\x11" * 8))
 
     def test_does_not_recognise_another_workers_id(self, server_certificate):
         one = endpoint(server_certificate)
-        one.learn(spoken(b"\xaa", b"\x11" * 8))
+        one.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
 
         assert not one.mine(short(b"\x22" * 8))
 
     def test_recognises_a_long_header_naming_its_own_id(self, server_certificate):
         one = endpoint(server_certificate)
-        one.learn(spoken(b"\xaa", b"\x11" * 8))
+        one.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
 
         assert one.mine(onward(b"\x11" * 8))
 
@@ -115,6 +122,36 @@ class TestRecognition:
 
         assert not one.mine(short(b"\x11" * 8))
         assert not one.mine(onward(b"\x11" * 8))
+
+class TestForgetting:
+    # A worker must let go of a connection's identifiers once it is gone, or the
+    # routing table would grow without bound over the lifetime of the server.
+
+    def test_forgetting_a_connection_drops_the_identifiers_it_handed_out(self, server_certificate):
+        one = endpoint(server_certificate)
+        one.learn(spoken(b"\xaa", b"\x11" * 8), (LOCAL, 4433))
+
+        assert one.mine(short(b"\x11" * 8))
+
+        one.unlearn(Gone((LOCAL, UDPPort(4433))))
+
+        assert not one.mine(short(b"\x11" * 8))
+        assert one.identifiers == {}
+        assert one.lengths == set()
+
+    def test_forgetting_one_connection_keeps_anothers_identifiers(self, server_certificate):
+        # Each connection answers a different peer, so letting one go must leave
+        # the other's identifier in place.
+        one = endpoint(server_certificate)
+        one.learn(spoken(b"\xaa", b"\x11" * 8), (LOCAL, 4433))
+        one.learn(spoken(b"\xbb", b"\x22" * 8), (LOCAL, 5544))
+
+        one.unlearn(Gone((LOCAL, UDPPort(4433))))
+
+        assert not one.mine(short(b"\x11" * 8))
+        assert one.mine(short(b"\x22" * 8))
+        assert set(one.identifiers) == {b"\x22" * 8}
+        assert one.lengths == {8}
 
 class TestRouting:
     def test_takes_everything_when_there_are_no_siblings(self, server_certificate):
@@ -136,7 +173,7 @@ class TestRouting:
     def test_takes_a_datagram_naming_its_own_id(self, server_certificate):
         siblings = Recording()
         one = endpoint(server_certificate, relay=siblings)
-        one.learn(spoken(b"\xaa", b"\x11" * 8))
+        one.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
 
         assert one.owns(short(b"\x11" * 8), (LOCAL, 1))
         assert siblings.carried == []
@@ -146,7 +183,7 @@ class TestRouting:
         # kernel delivered an established connection to the wrong worker.
         siblings = Recording()
         one = endpoint(server_certificate, relay=siblings)
-        one.learn(spoken(b"\xaa", b"\x11" * 8))
+        one.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
 
         datagram = short(b"\x22" * 8)
 
@@ -167,7 +204,7 @@ class TestRouting:
     def test_passes_on_a_handshake_packet_for_somebody_else(self, server_certificate):
         siblings = Recording()
         one = endpoint(server_certificate, relay=siblings)
-        one.learn(spoken(b"\xaa", b"\x11" * 8))
+        one.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
 
         assert not one.owns(onward(b"\x22" * 8), (LOCAL, 1))
         assert len(siblings.carried) == 1
@@ -202,7 +239,7 @@ class TestCarrying:
         second = QUICRelay(paths, 1, sockets[1])
 
         owner = endpoint(server_certificate)
-        owner.learn(spoken(b"\xaa", b"\x11" * 8))
+        owner.learn(spoken(b"\xaa", b"\x11" * 8), PEER)
 
         taken = []
         owner.take = lambda data, address: taken.append((data, address))
@@ -236,7 +273,7 @@ class TestCarrying:
         second = QUICRelay(paths, 1, sockets[1])
 
         stranger = endpoint(server_certificate)
-        stranger.learn(spoken(b"\xaa", b"\x99" * 8))
+        stranger.learn(spoken(b"\xaa", b"\x99" * 8), PEER)
 
         taken = []
         stranger.take = lambda data, address: taken.append((data, address))

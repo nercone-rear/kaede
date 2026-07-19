@@ -120,7 +120,10 @@ class QUICEndpoint:
     def owns(self, data: bytes, address: Tuple[str, int]) -> bool:
         return True
 
-    def learn(self, data: bytes):
+    def learn(self, data: bytes, address: Tuple[str, int]):
+        return
+
+    def unlearn(self, connection: "QUICConnection"):
         return
 
     def take(self, data: bytes, address: Tuple[str, int]):
@@ -207,13 +210,14 @@ class QUICEndpoint:
         self.drain()
 
         connection.free()
+        self.unlearn(connection)
 
     def drain(self):
         if self.transport is None:
             return
 
         for data, address in self.pair.packets():
-            self.learn(data)
+            self.learn(data, address)
 
             try:
                 if self.connected:
@@ -340,6 +344,7 @@ class QUICEndpoint:
             del self.connections[connection.dst]
 
         connection.free()
+        self.unlearn(connection)
 
     def free(self):
         self.closed = True
