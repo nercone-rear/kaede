@@ -350,3 +350,40 @@ class TestClient:
 
         with pytest.raises(Exception):
             await client.open()
+
+class TestIdle:
+    # Unlike UDP, a stream socket has a real lifecycle, but a peer that connects
+    # and then falls silent still holds a slot. With an idle_timeout the server
+    # reaps it and unblocks the handler.
+
+    async def test_an_idle_connection_is_reaped(self, socket_path):
+        woken = asyncio.Event()
+
+        async def stall(connection):
+            await connection.receive(1)  # blocks until the reaper drops the connection
+            woken.set()
+
+        async with Running(socket_path, stall, config=UDSServerConfig(idle_timeout=0.05)) as server:
+            async with UDSClient(socket_path):
+                await asyncio.sleep(0.15)
+                server.expire()
+
+                await asyncio.wait_for(woken.wait(), 2)
+
+    async def test_a_fresh_connection_is_kept(self, socket_path):
+        async def hold(connection):
+            await connection.receive(1)
+
+        async with Running(socket_path, hold, config=UDSServerConfig(idle_timeout=100.0)) as server:
+            async with UDSClient(socket_path):
+                await asyncio.sleep(0.1)
+                server.expire()
+
+                assert len(server.connections) == 1
+
+    async def test_the_mode_is_applied_before_the_socket_accepts(self, socket_path):
+        # The socket file must never be reachable with looser permissions than
+        # requested; binding under a tightened umask means even the moment before
+        # the explicit chmod is already restricted.
+        async with Running(socket_path, upper, config=UDSServerConfig(mode=0o600)):
+            assert stat.S_IMODE(os.stat(str(socket_path)).st_mode) == 0o600

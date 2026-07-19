@@ -283,17 +283,29 @@ class QUICEndpoint:
         self.pointer = pointer
         self.attach(pointer)
 
-        dst = self.socket.dst
-        self.qtls.remake(self.remote, dst[0], int(dst[1]))
+        connection = None
 
-        if self.qtls.set_peer_address(pointer, self.remote) != 1:
-            raise QUICConnectionError(f"OpenSSL rejected {dst[0]}:{int(dst[1])} as the peer address: {self.library.reason()}")
+        try:
+            dst = self.socket.dst
+            self.qtls.remake(self.remote, dst[0], int(dst[1]))
 
-        self.qtls.default_stream_mode(pointer, Stream.MODE_NONE)
-        self.qtls.incoming_streams(pointer, Incoming.ACCEPT, 0)
+            if self.qtls.set_peer_address(pointer, self.remote) != 1:
+                raise QUICConnectionError(f"OpenSSL rejected {dst[0]}:{int(dst[1])} as the peer address: {self.library.reason()}")
 
-        connection = QUICConnection(self, pointer, dst=(dst[0], UDPPort(dst[1])))
-        connection.prepare(hostname)
+            self.qtls.default_stream_mode(pointer, Stream.MODE_NONE)
+            self.qtls.incoming_streams(pointer, Incoming.ACCEPT, 0)
+
+            connection = QUICConnection(self, pointer, dst=(dst[0], UDPPort(dst[1])))
+            connection.prepare(hostname)
+
+        except BaseException:
+            if connection is not None:
+                connection.free()
+            else:
+                self.library.free(pointer)
+
+            self.pointer = None
+            raise
 
         self.connections[connection.dst] = connection
         return connection
@@ -342,6 +354,9 @@ class QUICEndpoint:
     def forget(self, connection: "QUICConnection"):
         if self.connections.get(connection.dst) is connection:
             del self.connections[connection.dst]
+
+        if connection in self.arrivals:
+            self.arrivals.remove(connection)
 
         connection.free()
         self.unlearn(connection)

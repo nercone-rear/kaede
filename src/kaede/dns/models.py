@@ -330,6 +330,19 @@ class DNSName:
                 labels.append(DNSName.escape(message[position + 1:position + 1 + length]))
                 position += 1 + length
 
+    @staticmethod
+    def within(message: bytes, offset: int, end: int) -> Tuple[str, int]:
+        # A name embedded in record data must have its own encoding (labels and
+        # any leading compression pointer) end within that record's RDLENGTH; a
+        # name that runs past it, e.g. a label with no terminator inside the
+        # RDATA, would otherwise be read from the bytes of the following record.
+        name, following = DNSName.unpack(message, offset)
+
+        if following > end:
+            raise DNSFormatError("A name runs past the end of its record data.")
+
+        return name, following
+
 class DNSRecordData(ABC):
     @abstractmethod
     def pack(self) -> bytes:

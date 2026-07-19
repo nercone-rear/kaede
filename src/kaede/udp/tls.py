@@ -191,4 +191,8 @@ class DTLSConnection:
             except Exception:
                 pass
 
-        await self.transport.close()
+        try:
+            await self.transport.close()
+
+        finally:
+            self.session.free()

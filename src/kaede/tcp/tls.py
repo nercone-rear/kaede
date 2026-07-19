@@ -234,4 +234,9 @@ class TLSConnection:
             except Exception:
                 pass
 
-        await self.transport.close(half_close)
+        try:
+            await self.transport.close(half_close)
+
+        finally:
+            if not half_close:
+                self.session.free()

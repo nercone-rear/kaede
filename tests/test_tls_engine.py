@@ -1,10 +1,13 @@
+import gc
+import sys
+
 from ssl import CERT_NONE, CERT_REQUIRED
 
 import pytest
 
 from kaede.tls import TLSVersion, TLSGroup, TLSCipher, TLSConfig
 from kaede.tls.openssl import OpenSSL, TLSContext, TLSSession, ALPN, Protocol, Control
-from kaede.tls.errors import TLSConfigError, TLSHandshakeError, TLSVerificationError
+from kaede.tls.errors import TLSConfigError, TLSHandshakeError, TLSVerificationError, TLSLibraryError
 
 # The two sessions are wired to each other through their memory BIOs, so a full
 # RFC 8446 handshake is exercised without any socket being involved.
@@ -448,3 +451,26 @@ class TestCipherCatalogue:
 
         assert client.version == "TLSv1.2"
         assert client.cipher == "ECDHE-RSA-AES256-GCM-SHA384"
+
+class TestConstructionFailure:
+    # A TLSContext frees its native context in __del__. If construction fails
+    # before the context exists (for instance OpenSSL is too old and the binding
+    # layer raises), __del__ still runs while the object is collected, so the
+    # attributes it touches must already exist or it would raise a second,
+    # confusing error that masks the real one.
+
+    def test_a_failed_construction_is_collected_cleanly(self, monkeypatch):
+        def refuse(self, **kwargs):
+            raise TLSLibraryError("simulated: this OpenSSL is too old")
+
+        monkeypatch.setattr(OpenSSL, "__init__", refuse)
+
+        captured = []
+        monkeypatch.setattr(sys, "unraisablehook", lambda unraisable: captured.append(unraisable))
+
+        with pytest.raises(TLSLibraryError):
+            TLSContext()
+
+        gc.collect()
+
+        assert not captured, f"__del__ raised while collecting a half-built TLSContext: {[str(item.exc_value) for item in captured]}"

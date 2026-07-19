@@ -518,6 +518,9 @@ class H3Connection(HTTPConnection):
                 if name in pseudo:
                     raise H3Error(Code.MESSAGE_ERROR, f"The pseudo-header {name} is repeated.")
 
+                if any(ord(character) == 0x7F or ord(character) < 0x20 for character in value):
+                    raise H3Error(Code.MESSAGE_ERROR, f"The pseudo-header {name} carries a control character.")
+
                 pseudo[name] = value
                 continue
 

@@ -392,15 +392,15 @@ class OpenSSL:
 
 class TLSContext:
     def __init__(self, config: Optional[TLSConfig] = None, *, server: bool = False, alpn: Optional[List[str]] = None, datagram: bool = False, cookies: Optional[Cookies] = None, library: Optional[OpenSSL] = None):
+        self.pointer = None
+        self.callbacks: List = []
+
         self.config = config or TLSConfig()
         self.server = server
         self.alpn = alpn
         self.datagram = datagram
         self.cookies = cookies
         self.library = library or OpenSSL()
-
-        self.pointer = None
-        self.callbacks: List = []
 
         self.build()
 
@@ -681,6 +681,9 @@ class TLSSession:
     link_mtu = 1280
 
     def __init__(self, context: TLSContext, *, hostname: Optional[str] = None):
+        self.pointer = None
+        self.address = None
+
         self.context = context
         self.library = context.library
         self.server = context.server
@@ -691,8 +694,6 @@ class TLSSession:
         self.closed = False
         self.ended = False
         self.truncated = False
-
-        self.address = None
 
         self.pointer = self.library.new(context.pointer)
 
@@ -895,11 +896,17 @@ class TLSSession:
 
     @property
     def version(self) -> Optional[str]:
+        if not self.pointer:
+            return None
+
         value = self.library.get_version(self.pointer)
         return value.decode() if value else None
 
     @property
     def cipher(self) -> Optional[str]:
+        if not self.pointer:
+            return None
+
         current = self.library.get_cipher(self.pointer)
 
         if not current:
@@ -910,11 +917,17 @@ class TLSSession:
 
     @property
     def group(self) -> Optional[str]:
+        if not self.pointer:
+            return None
+
         value = self.library.get_group(self.pointer)
         return value.decode() if value else None
 
     @property
     def protocol(self) -> Optional[str]:
+        if not self.pointer:
+            return None
+
         data = ctypes.POINTER(ctypes.c_ubyte)()
         length = ctypes.c_uint(0)
 
@@ -927,16 +940,19 @@ class TLSSession:
 
     @property
     def servername(self) -> Optional[str]:
+        if not self.pointer:
+            return None
+
         value = self.library.get_servername(self.pointer, Control.NAMETYPE_HOST)
         return value.decode() if value else None
 
     @property
     def verified(self) -> bool:
-        return self.library.get_verify(self.pointer) == 0
+        return bool(self.pointer) and self.library.get_verify(self.pointer) == 0
 
     @property
     def reused(self) -> bool:
-        return bool(self.library.reused(self.pointer))
+        return bool(self.pointer) and bool(self.library.reused(self.pointer))
 
     def free(self):
         if self.pointer:

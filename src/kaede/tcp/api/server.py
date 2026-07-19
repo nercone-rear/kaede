@@ -27,6 +27,8 @@ class TCPServerConfig:
     tls: Optional[TLSConfig] = None
     alpn: Optional[List[str]] = None
 
+    idle_timeout: Optional[float] = None # drop a connection with no traffic for this long; None disables reaping
+
     handshake_timeout: Optional[float] = 30.0
 
 class TCPHandler:
@@ -38,6 +40,7 @@ class TCPGate:
         self.limits = limits
         self.connections = 0
         self.history: Dict[str, Deque[float]] = {}
+        self.history_limit = max(1024, limits.max_connection_nums) # a hard bound on tracked hosts
 
     @property
     def window(self) -> float:
@@ -60,6 +63,9 @@ class TCPGate:
 
         if record is None:
             record = self.history[host] = deque()
+
+            while len(self.history) > self.history_limit:
+                del self.history[next(iter(self.history))]
 
         while record and now - record[0] > self.window:
             record.popleft()
@@ -115,7 +121,9 @@ class TCPServer:
 
     @property
     def interval(self) -> float:
-        return max(1.0, self.gate.window)
+        spans = [span for span in (self.gate.window, (self.config.idle_timeout / 4) if self.config.idle_timeout else 0.0) if span]
+
+        return max(1.0, min(spans)) if spans else 1.0
 
     async def listen(self, handler: TCPHandler, ports: Optional[List[Tuple[str, TCPPort]]] = None, *, reuse_port: bool = False):
         ports = [("0.0.0.0", TCPPort(0))] if ports is None else ports
@@ -190,6 +198,12 @@ class TCPServer:
             self.expire()
 
     def expire(self, now: Optional[float] = None):
+        now = time.monotonic() if now is None else now
+
+        if self.config.idle_timeout is not None:
+            for connection in [c for c in self.connections if now - c.active > self.config.idle_timeout]:
+                connection.drop()
+
         self.gate.sweep(now)
 
     async def close(self, timeout: Optional[float] = None):
@@ -203,11 +217,16 @@ class TCPServer:
         if self.tasks:
             await asyncio.wait(set(self.tasks), timeout=timeout)
 
-        for task in set(self.tasks):
+        pending = set(self.tasks)
+
+        for task in pending:
             task.cancel()
 
         for connection in list(self.connections):
             await connection.close()
+
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
         for server in self.servers:
             await server.wait_closed()

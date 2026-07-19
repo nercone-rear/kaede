@@ -5,13 +5,13 @@ import pytest
 
 from kaede.tls import TLSConfig
 from kaede.tcp import TCPPort
-from kaede.http.models import HTTPPort, HTTPHeaders, HTTPResponse
+from kaede.http.models import HTTPPort, HTTPHeaders, HTTPResponse, HTTPBroadRole
 from kaede.http.responses import JSONResponse, PlainTextResponse
 from kaede.http.errors import HTTPError
 from kaede.http.finalizer import finalize_response
 from kaede.http.api.server import HTTPServer, HTTPServerConfig, HTTPHandler
 from kaede.http.api.client import HTTPClient, HTTPClientConfig
-from kaede.http.protocol.h2 import H2Settings, H2Frame, Frame
+from kaede.http.protocol.h2 import H2Settings, H2Frame, Frame, H2Connection, H2StreamError
 
 LOCAL = "127.0.0.1"
 
@@ -29,11 +29,14 @@ class Echo(HTTPHandler):
         })))
 
 class Running:
-    def __init__(self, handler=None, *, certificate, versions=("HTTP/1.1", "HTTP/2.0")):
+    def __init__(self, handler=None, *, certificate, versions=("HTTP/1.1", "HTTP/2.0"), body_limit=None):
         certfile, keyfile = certificate
 
         config = HTTPServerConfig(versions=list(versions))
         config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE)
+
+        if body_limit is not None:
+            config.limits.max_message_body_size = body_limit
 
         self.server = HTTPServer(config=config)
         self.handler = handler or Echo()
@@ -119,6 +122,66 @@ class TestFlowControl:
                 response = await (await http.post(endpoint(server) + "/", body=payload)).receive()
 
                 assert len(response.json["body"]) == len(payload)
+
+class TestBodyLimit:
+    # RFC 9113 has no per-stream body cap of its own, but an unbounded receive
+    # buffer is a memory-exhaustion vector, so the server must stop a stream
+    # whose data exceeds the configured limit instead of buffering it all. h1
+    # answers 413 and h3 raises H3_EXCESSIVE_LOAD for the same reason; h2 has to
+    # be symmetric with them.
+
+    async def test_a_body_within_the_limit_still_round_trips(self, server_certificate, authority):
+        async with Running(certificate=server_certificate, body_limit=4096) as server:
+            async with client(authority) as http:
+                response = await (await http.post(endpoint(server) + "/", body=b"a" * 4096)).receive()
+
+                assert len(response.json["body"]) == 4096
+
+    async def test_a_body_over_the_limit_resets_the_stream(self, server_certificate, authority):
+        # A body that fits in the initial flow-control window is sent in one
+        # burst, so the reset is observed on the response rather than racing the
+        # send. 8 KiB is over the 1 KiB limit but well under the 64 KiB window.
+        async with Running(certificate=server_certificate, body_limit=1024) as server:
+            async with client(authority) as http:
+                with pytest.raises(HTTPError) as caught:
+                    await (await http.post(endpoint(server) + "/", body=b"a" * 8192)).receive()
+
+                # ENHANCE_YOUR_CALM (0xb) surfaced as a 502 from the reset stream.
+                assert caught.value.code == 502
+                assert "11" in str(caught.value)
+
+class Stub:
+    """The little a header block needs from its session to be split apart."""
+
+    class remote:
+        initial_window_size = 65535
+
+    transport = None
+    limits = None
+    observer = None
+
+class TestPseudoHeaders:
+    # RFC 9113 section 8.2.1: a field value carrying NUL, CR, or LF makes the
+    # message malformed. Regular header values are cleaned by HTTPHeaders, but
+    # pseudo-header values (:method, :path, ...) are consumed directly, so a
+    # control character in :path would otherwise be a request-splitting or
+    # log-injection primitive once the value is reused downstream.
+
+    def connection(self) -> H2Connection:
+        return H2Connection(Stub(), 1, role=HTTPBroadRole.SERVER)
+
+    @pytest.mark.parametrize("value", ["/x\r\nx-injected: 1", "/x\nfoo", "/x\rfoo", "/x\x00", "\x7f"])
+    def test_a_control_character_in_a_pseudo_header_is_rejected(self, value):
+        fields = [(":method", "GET"), (":scheme", "https"), (":authority", "example.com"), (":path", value)]
+
+        with pytest.raises(H2StreamError):
+            self.connection().split(fields, trailer=False)
+
+    def test_a_clean_path_is_accepted(self):
+        fields = [(":method", "GET"), (":scheme", "https"), (":authority", "example.com"), (":path", "/ok")]
+        pseudo, _ = self.connection().split(fields, trailer=False)
+
+        assert pseudo[":path"] == "/ok"
 
 class TestErrors:
     async def test_a_handler_error_becomes_a_response(self, server_certificate, authority):

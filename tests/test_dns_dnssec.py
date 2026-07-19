@@ -200,6 +200,18 @@ class TestDelegations:
 
         assert not validator.verify_ds(ED_KEY, broken)
 
+    def test_a_sha1_ds_is_not_honoured(self, validator):
+        # RFC 8624 section 3.3: SHA-1 DS digests are deprecated. Even a correctly
+        # computed SHA-1 digest must not prove the delegation, so the zone falls
+        # back to insecure rather than secure.
+        import hashlib
+        from kaede.dns import DNSName
+
+        digest = hashlib.sha1(DNSName.wire("example.net") + P256_KEY.data.pack()).digest()
+        sha1_ds = DNSRecord("example.net", DNSRecordType.DS, DSRecordData(55648, 13, 1, digest))
+
+        assert not validator.verify_ds(P256_KEY, sha1_ds)
+
     def test_the_root_anchors_are_the_iana_set(self, validator):
         tags = {anchor.data.key_tag for anchor in DNSSECValidator.ANCHORS}
 

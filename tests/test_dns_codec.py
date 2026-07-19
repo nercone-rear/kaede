@@ -82,6 +82,19 @@ class TestNames:
         with pytest.raises(DNSFormatError):
             DNSName.unpack(b"\xc0\x04\x00\x00\x03www\x00", 0) # points forward
 
+    def test_a_name_may_not_run_past_its_record_data(self):
+        # The label "www" needs a terminating \x00, but with end=4 that zero at
+        # offset 4 lies outside the record's RDLENGTH, so the name would be read
+        # from the following record's bytes. It must be rejected instead.
+        with pytest.raises(DNSFormatError):
+            DNSName.within(b"\x03www\x00", 0, 4)
+
+    def test_a_name_ending_within_its_record_data_is_accepted(self):
+        name, following = DNSName.within(b"\x03www\x00", 0, 5)
+
+        assert name == "www"
+        assert following == 5
+
     def test_a_pointer_loop_is_rejected(self):
         # Two pointers referring to each other survive the backward rule alone.
         raw = b"\x01a\xc0\x04\x01b\xc0\x00"
@@ -175,6 +188,18 @@ class TestMessages:
         for cut in range(len(wire)):
             with pytest.raises(DNSError):
                 DNSMessage.unpack(wire[:cut])
+
+    def test_a_record_name_that_overruns_its_rdata_is_rejected(self):
+        # A CNAME whose RDLENGTH is 4 ("\x03www") carries no terminator inside
+        # the record; a lax parser would read the "\x00" owner of the following
+        # A record as the terminator, so the name would be built from bytes that
+        # belong to another record. The RDLENGTH bound must reject it.
+        raw = header(qd=0, an=2)
+        raw += b"\x00" + (5).to_bytes(2, "big") + (1).to_bytes(2, "big") + (0).to_bytes(4, "big") + (4).to_bytes(2, "big") + b"\x03www"
+        raw += b"\x00" + (1).to_bytes(2, "big") + (1).to_bytes(2, "big") + (0).to_bytes(4, "big") + (4).to_bytes(2, "big") + bytes([192, 0, 2, 1])
+
+        with pytest.raises(DNSFormatError):
+            DNSMessage.unpack(raw)
 
     def test_an_unknown_record_type_is_kept_raw(self):
         raw = header(qd=0, an=1)
