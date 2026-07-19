@@ -231,16 +231,11 @@ When approved by human review and a human requests the creation of a commit, you
 
 ### If the appropriate version of OpenSSL is not installed in the sandbox
 
-The 3.6/4.0 versions required by Kaede are the latest releases of the 3.x/4.x series. You can read the manuals in the /doc/man3 directory of the OpenSSL repository (openssl/openssl), or on manpages.debian.org under the testing/unstable (3.6+) and experimental (4.0+) versions.
-If the appropriate version of OpenSSL is not available in your sandbox environment, you can obtain the manuals from these sources and verify them manually.
+The OpenSSL requirements for Kaede are strict, and even the latest versions provided by most Linux distributions do not meet the criteria.
 
-Additionally, when you submit a pull request, automated tests via pytest using the latest OpenSSL will be executed on GitHub Actions.
-While these are only supplementary as they are automated tests, they will be useful for minimal functional testing using the latest OpenSSL.
-The GitHub Actions workflows (`.github/workflows/test.yml`, `.github/workflows/release.yml`) do not build OpenSSL from source; they download pre-built OpenSSL binaries from https://github.com/nercone-rear/openssl (a repository that periodically builds the latest stable OpenSSL 3.x/4.x releases for Linux/macOS/Windows and publishes them as GitHub Releases), verifying each download against the release's `SHA256SUMS`.
+This includes the Claude sandbox environment. Unless you are running Claude Code locally, Claude can only work within the sandbox. Since the sandbox only provides older versions of OpenSSL, similar to a standard Linux environment, you must build it from source or obtain a pre-built binary.
 
-If you wish to verify functionality before submitting a pull request, you can also read the OpenSSL source code directly (this applies to open source software in general, not just OpenSSL).
-Please note that this method consumes a large amount of the context window and should not be used excessively, but it is one approach to keep in mind.
+Fortunately, I have created a GitHub repository to pre-build OpenSSL for Kaede development. You can obtain builds for each OpenSSL version, platform, and architecture at [nercone-rear/openssl](https://github.com/nercone-rear/openssl/releases/). These are the same binaries used in the CI.
 
-By the way, since the sandbox performance is not very high, building OpenSSL from source is not recommended.
-You should either use the methods mentioned above or download a pre-built version, e.g. from https://github.com/nercone-rear/openssl/releases, the same source used by CI.
-Please note that you need to run `add_repo` to fetch from external repositories such as `nercone-rear/openssl`.
+If a suitable version of OpenSSL is not installed, please obtain a binary from nercone-rear/openssl.
+Please note that you may need to execute add_repo to retrieve binaries from external repositories like nercone-rear/openssl. In most cases, this will be approved by the user or automatically approved by the system.
