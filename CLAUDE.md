@@ -227,16 +227,17 @@ When approved by human review and a human requests the creation of a commit, you
     - For [TOOL 0] [TOOL 1], list the names of the tools used to analyze the code, separated by spaces.
         - You do not need to list basic daily system tools like file editing, web search/browsing, git, uv, or clang.
 
-## Troubleshooting / Useful Information
+## Troubleshooting / Helpful Information
 
-### If the appropriate version of OpenSSL is not installed in the sandbox
+### If the appropriate version of OpenSSL is not installed
 
-The OpenSSL requirements for Kaede are strict, and even the latest versions provided by most Linux distributions do not meet the criteria.
+Kaede has strict OpenSSL requirements that are not met even by the latest versions provided by most Linux distributions.
 
-This includes the Claude sandbox environment. Unless you are running Claude Code locally, Claude can only work within the sandbox. Since the sandbox only provides older versions of OpenSSL, similar to a standard Linux environment, you must build it from source or obtain a pre-built binary.
+This includes Claude's sandbox environment. Unless you are running Claude Code locally, Claude can only work within a sandbox. Since only older versions of OpenSSL are available in the sandbox, just like in a standard Linux environment, you must build from source or obtain pre-built binaries.
 
-Fortunately, I have created a GitHub repository to pre-build OpenSSL for Kaede development. You can obtain builds for each OpenSSL version, platform, and architecture at [nercone-rear/openssl](https://github.com/nercone-rear/openssl/releases/). These are the same binaries used in the CI.
+Fortunately, I have created a GitHub repository to pre-build OpenSSL for Kaede development. You can obtain builds for each OpenSSL version, platform, and architecture from [nercone-rear/openssl](https://github.com/nercone-rear/openssl/releases/). These are the same binaries used in CI.
 
-If a suitable version of OpenSSL is not installed, please obtain a binary from nercone-rear/openssl.
-Please note that you may need to execute add_repo to retrieve binaries from external repositories like nercone-rear/openssl. In most cases, this will be approved by the user or automatically approved by the system.
-Each release also includes SHA256SUMS/SHA384SUMS/SHA512SUMS files, so please make sure to verify them after downloading.
+If a suitable version of OpenSSL is not installed, please obtain the binaries from nercone-rear/openssl.
+Note that you will need to execute add_repo to fetch from external repositories like nercone-rear/openssl. In most cases, users will approve this.
+
+Each release includes SHA256SUMS/SHA384SUMS/SHA512SUMS files, so please be sure to verify them after downloading.
