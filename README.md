@@ -27,6 +27,12 @@ Windowsへの対応は予定していません。
 ### UDP
 標準ライブラリのラッパーとして実装します。
 
+### QUIC
+KaedeのUDP/TLSモジュールを使用して実装します。
+
+### HTTP
+KaedeのTCP/QUIC/UDS/TLSモジュールを使用して実装します。
+
 ### SMTP
 KaedeのTCP/TLSモジュールを使用して実装します。
 
@@ -35,12 +41,6 @@ KaedeのTCP/TLSモジュールを使用して実装します。
 
 ### POP3
 KaedeのTCP/TLSモジュールを使用して実装します。
-
-### QUIC
-KaedeのUDP/TLSモジュールを使用して実装します。
-
-### HTTP
-KaedeのTCP/QUIC/UDS/TLSモジュールを使用して実装します。
 
 ### DNS
 KaedeのTCP/UDP/QUIC/HTTP/TLSモジュールを使用して実装します。
