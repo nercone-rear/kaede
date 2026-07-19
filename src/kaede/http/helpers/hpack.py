@@ -554,9 +554,6 @@ class Coding:
         return (decoded.decode("latin-1"), offset)
 
 class HPACKEncoder:
-    def __init__(self, capacity: int = 4096):
-        self.capacity = capacity
-
     def encode(self, headers: List[Tuple[str, str]]) -> bytes:
         out = bytearray()
 
@@ -614,7 +611,7 @@ class HPACKDecoder:
                 name, value = self.entry(index)
 
             elif byte & 0x40: # literal with incremental indexing
-                name, value, offset = self.literal(data, offset, 6)
+                name, value, offset = self.line(data, offset, 6)
                 self.table.add(name, value)
 
             elif byte & 0x20: # dynamic table size update
@@ -628,7 +625,7 @@ class HPACKDecoder:
 
             else: # literal without indexing (0x00) or never indexed (0x10)
                 never = bool(byte & 0x10)
-                name, value, offset = self.literal(data, offset, 4)
+                name, value, offset = self.line(data, offset, 4)
 
             total += HPACKTable.cost(name, value)
 
@@ -639,7 +636,7 @@ class HPACKDecoder:
 
         return headers
 
-    def literal(self, data: bytes, offset: int, prefix: int) -> Tuple[str, str, int]:
+    def line(self, data: bytes, offset: int, prefix: int) -> Tuple[str, str, int]:
         index, offset = Coding.read_integer(data, offset, prefix)
 
         if index:

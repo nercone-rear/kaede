@@ -43,6 +43,12 @@ class DNSServer:
 
         self.stopped: Optional[asyncio.Event] = None
 
+    async def __aenter__(self) -> "DNSServer":
+        return self
+
+    async def __aexit__(self, *_):
+        await self.close()
+
     @property
     def ports(self) -> List[Tuple[str, DNSPort]]:
         found: List[Tuple[str, DNSPort]] = []

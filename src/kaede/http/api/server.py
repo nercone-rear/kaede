@@ -162,7 +162,7 @@ class HTTPServer:
         if protocol == "h2":
             from ..protocol.h2 import H2Session
 
-            await H2Session(connection, server=True, limits=self.config.limits).run(self.handler, self)
+            await H2Session(connection, role=HTTPBroadRole.SERVER, limits=self.config.limits).run(self.handler, self)
             return
 
         await self.serve_h1(connection, secure=secure)
@@ -170,7 +170,7 @@ class HTTPServer:
     async def serve_quic(self, connection):
         from ..protocol.h3 import H3Session
 
-        await H3Session(connection, server=True, limits=self.config.limits).run(self.handler, self)
+        await H3Session(connection, role=HTTPBroadRole.SERVER, limits=self.config.limits).run(self.handler, self)
 
     async def serve_h1(self, connection, *, secure: bool):
         src, dst = self.spot(connection, secure)

@@ -186,7 +186,7 @@ class TestMessages:
         assert record.type == 999
         assert isinstance(record.data, RawRecordData)
         assert record.data.raw == b"abc"
-        assert record.data.rtype_unknown == 999
+        assert record.data.code == 999
         assert DNSMessage.unpack(message.pack()).answers[0].data.raw == b"abc"
 
     def test_reply_echoes_the_question(self):

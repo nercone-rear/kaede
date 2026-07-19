@@ -166,7 +166,7 @@ class TestTruncation:
                 host, port = [entry for entry in server.ports if entry[1].type == "udp"][0]
                 query = DNSMessage(questions=[DNSQuestion("big.example.test", DNSRecordType.TXT)], edns=EDNS(payload_size=1232))
 
-                response = await DNSUDPTransport((host, int(port.value))).query(query, timeout=2.0, retries=0)
+                response = await DNSUDPTransport((host, int(port.value)), retries=0).query(query, timeout=2.0)
 
                 assert response.truncated
                 assert len(response.answers) == 0

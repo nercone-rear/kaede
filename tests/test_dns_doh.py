@@ -45,7 +45,7 @@ class Running:
 def transport(server, authority) -> DNSHTTPSTransport:
     host, port = server.ports[0]
 
-    return DNSHTTPSTransport(LOCAL, int(port.value), tls=TLSConfig(cafile=authority.ca), hostname="localhost", connect_timeout=5)
+    return DNSHTTPSTransport((LOCAL, int(port.value)), tls=TLSConfig(cafile=authority.ca), hostname="localhost", connect_timeout=5)
 
 class TestDoH:
     async def test_a_query_over_doh(self, server_certificate, authority):

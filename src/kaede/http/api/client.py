@@ -143,7 +143,7 @@ class HTTPClient:
             self.hold(host, port, secure, transport)
             return None
 
-        session = H2Session(transport, server=False, limits=self.config.limits, observer=lambda message: self.notice(host, secure, message))
+        session = H2Session(transport, role=HTTPBroadRole.CLIENT, limits=self.config.limits, observer=lambda message: self.notice(host, secure, message))
         await session.start()
         pump = asyncio.ensure_future(session.pump())
 
@@ -174,7 +174,7 @@ class HTTPClient:
             await client.close()
             raise HTTPError(502, f"Could not reach {host}:{port} over HTTP/3: {e}")
 
-        session = H3Session(connection, server=False, limits=self.config.limits, observer=lambda message: self.notice(host, True, message))
+        session = H3Session(connection, role=HTTPBroadRole.CLIENT, limits=self.config.limits, observer=lambda message: self.notice(host, True, message))
         await session.start()
         reader = asyncio.ensure_future(self.overhear(session))
 

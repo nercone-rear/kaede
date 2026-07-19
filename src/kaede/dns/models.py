@@ -35,7 +35,10 @@ class DNSOpcode(Enum):
 
     @staticmethod
     def of(value: int) -> Union["DNSOpcode", int]:
-        return OPCODE_MAP.get(value, value)
+        try:
+            return DNSOpcode(value)
+        except ValueError:
+            return value
 
 class DNSResponseCode(Enum):
     NOERROR   = 0
@@ -61,7 +64,10 @@ class DNSResponseCode(Enum):
 
     @staticmethod
     def of(value: int) -> Union["DNSResponseCode", int]:
-        return RCODE_MAP.get(value, value)
+        try:
+            return DNSResponseCode(value)
+        except ValueError:
+            return value
 
 class DNSRecordType(Enum):
     A          = 1
@@ -119,7 +125,10 @@ class DNSRecordType(Enum):
 
     @staticmethod
     def of(value: int) -> Union["DNSRecordType", int]:
-        return TYPE_MAP.get(value, value)
+        try:
+            return DNSRecordType(value)
+        except ValueError:
+            return value
 
     @staticmethod
     def from_name(value: str) -> Union["DNSRecordType", int]:
@@ -133,6 +142,11 @@ class DNSRecordType(Enum):
         except KeyError:
             raise DNSFormatError(f"{value!r} is not a known record type.")
 
+    @staticmethod
+    def mnemonic(value: Union["DNSRecordType", int]) -> str:
+        # RFC 3597 section 5: an unknown type renders as TYPENNN, the inverse of from_name.
+        return value.name if isinstance(value, DNSRecordType) else f"TYPE{value}"
+
 class DNSRecordClass(Enum):
     IN = "Internet"
     CS = "CSNET"
@@ -141,11 +155,15 @@ class DNSRecordClass(Enum):
 
     @property
     def number(self) -> int:
-        return CLASS_NUMBERS[self]
+        return {"IN": 1, "CS": 2, "CH": 3, "HS": 4}[self.name]
 
     @staticmethod
     def of(value: int) -> Union["DNSRecordClass", int]:
-        return CLASS_MAP.get(value, value)
+        for rclass in DNSRecordClass:
+            if rclass.number == value:
+                return rclass
+
+        return value
 
 class DNSName:
     MAX_LENGTH = 255
@@ -328,9 +346,39 @@ class DNSRecordData(ABC):
 
     @staticmethod
     def of(rtype: Union["DNSRecordType", int]) -> type:
-        from .records import RECORD_MAP, RawRecordData
+        from .records import (
+            RawRecordData, ARecordData, AAAARecordData, NSRecordData, CNAMERecordData,
+            PTRRecordData, DNAMERecordData, SOARecordData, MXRecordData, TXTRecordData,
+            SRVRecordData, CAARecordData, DSRecordData, CDSRecordData, DNSKEYRecordData,
+            CDNSKEYRecordData, RRSIGRecordData, NSECRecordData, NSEC3RecordData,
+            NSEC3PARAMRecordData, TLSARecordData, SMIMEARecordData, SVCBRecordData, HTTPSRecordData
+        )
 
-        return RECORD_MAP.get(rtype, RawRecordData)
+        return {
+            DNSRecordType.A:          ARecordData,
+            DNSRecordType.AAAA:       AAAARecordData,
+            DNSRecordType.NS:         NSRecordData,
+            DNSRecordType.CNAME:      CNAMERecordData,
+            DNSRecordType.PTR:        PTRRecordData,
+            DNSRecordType.DNAME:      DNAMERecordData,
+            DNSRecordType.SOA:        SOARecordData,
+            DNSRecordType.MX:         MXRecordData,
+            DNSRecordType.TXT:        TXTRecordData,
+            DNSRecordType.SRV:        SRVRecordData,
+            DNSRecordType.CAA:        CAARecordData,
+            DNSRecordType.DS:         DSRecordData,
+            DNSRecordType.CDS:        CDSRecordData,
+            DNSRecordType.DNSKEY:     DNSKEYRecordData,
+            DNSRecordType.CDNSKEY:    CDNSKEYRecordData,
+            DNSRecordType.RRSIG:      RRSIGRecordData,
+            DNSRecordType.NSEC:       NSECRecordData,
+            DNSRecordType.NSEC3:      NSEC3RecordData,
+            DNSRecordType.NSEC3PARAM: NSEC3PARAMRecordData,
+            DNSRecordType.TLSA:       TLSARecordData,
+            DNSRecordType.SMIMEA:     SMIMEARecordData,
+            DNSRecordType.SVCB:       SVCBRecordData,
+            DNSRecordType.HTTPS:      HTTPSRecordData,
+        }.get(rtype, RawRecordData)
 
 @dataclass(frozen=True)
 class DNSQuestion:
@@ -511,6 +559,15 @@ class DNSMessage:
     @staticmethod
     def classify(value: Union[DNSRecordClass, int]) -> int:
         return value.number if isinstance(value, DNSRecordClass) else int(value)
+
+    def matches(self, response: "DNSMessage") -> bool:
+        if response.id != self.id or not response.response:
+            return False
+
+        if response.questions:
+            return len(response.questions) == len(self.questions) and all(a.matches(b) for a, b in zip(response.questions, self.questions))
+
+        return DNSMessage.code(response.rcode) != 0
 
     def reply(self, *, rcode: Union[DNSResponseCode, int] = DNSResponseCode.NOERROR) -> "DNSMessage":
         return DNSMessage(
@@ -729,10 +786,3 @@ class DNSMessage:
             offset += length
 
         return options
-
-OPCODE_MAP: Dict[int, DNSOpcode]       = {o.value: o for o in DNSOpcode}
-RCODE_MAP:  Dict[int, DNSResponseCode] = {r.value: r for r in DNSResponseCode}
-TYPE_MAP:   Dict[int, DNSRecordType]   = {t.value: t for t in DNSRecordType}
-
-CLASS_NUMBERS: Dict[DNSRecordClass, int] = {DNSRecordClass.IN: 1, DNSRecordClass.CS: 2, DNSRecordClass.CH: 3, DNSRecordClass.HS: 4}
-CLASS_MAP:     Dict[int, DNSRecordClass] = {number: rclass for rclass, number in CLASS_NUMBERS.items()}

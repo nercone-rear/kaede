@@ -8,7 +8,7 @@ from ...constants import Digits
 from ...tcp.errors import TCPError
 from ...uds.errors import UDSError
 from ...tls.errors import TLSError
-from ..models import HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
+from ..models import HTTPBroadRole, HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
 from ..errors import HTTPError
 from ..finalizer import finalize_response
 from ..helpers.compression import compress, decompress
@@ -117,22 +117,22 @@ class H2Session:
     CEILING = 0x7FFFFFFF
     PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
-    def __init__(self, transport, *, server: bool, limits, settings: Optional[H2Settings] = None, observer=None):
+    def __init__(self, transport, *, role: HTTPBroadRole, limits, settings: Optional[H2Settings] = None, observer=None):
         self.transport = transport
-        self.server = server
+        self.role = role
         self.limits = limits
         self.observer = observer
 
         self.local = settings or H2Settings(max_header_list_size=limits.max_headers_size * 8)
         self.remote = H2Settings()
 
-        self.encoder = HPACKEncoder(self.remote.header_table_size)
+        self.encoder = HPACKEncoder()
         self.decoder = HPACKDecoder(self.local.header_table_size, self.local.max_header_list_size)
 
         self.streams: Dict[int, "H2Connection"] = {}
         self.arrivals: "asyncio.Queue[Optional[H2Connection]]" = asyncio.Queue()
 
-        self.next_stream = 1 if not server else 2
+        self.next_stream = 2 if role == HTTPBroadRole.SERVER else 1
         self.last_stream = 0
         self.highest_remote = 0
 
@@ -170,7 +170,7 @@ class H2Session:
     # -- lifecycle -------------------------------------------------------
 
     async def start(self):
-        if self.server:
+        if self.role == HTTPBroadRole.SERVER:
             preface = await self.transport.receive_exactly(len(H2Session.PREFACE))
 
             if preface != H2Session.PREFACE:
@@ -300,7 +300,7 @@ class H2Session:
             await self.reset(e.stream, e.code)
 
     def idle(self, stream: int) -> bool:
-        local = (stream % 2 == 0) if self.server else (stream % 2 == 1)
+        local = (stream % 2 == 0) if self.role == HTTPBroadRole.SERVER else (stream % 2 == 1)
 
         return stream >= self.next_stream if local else stream > self.highest_remote
 
@@ -420,7 +420,7 @@ class H2Session:
 
             return
 
-        if not self.server:
+        if self.role != HTTPBroadRole.SERVER:
             raise H2Error(Code.PROTOCOL_ERROR, "The server opened a stream.")
 
         if stream % 2 == 0 or stream <= self.highest_remote:
@@ -432,7 +432,7 @@ class H2Session:
             return
 
         self.highest_remote = stream
-        connection = H2Connection(self, stream, server=True)
+        connection = H2Connection(self, stream, role=self.role)
         self.streams[stream] = connection
 
         try:
@@ -492,8 +492,6 @@ class H2Session:
 
                 if stream.send_window > H2Session.CEILING:
                     raise H2Error(Code.FLOW_CONTROL_ERROR, "SETTINGS_INITIAL_WINDOW_SIZE overflowed a stream window.")
-
-        self.encoder.capacity = self.remote.header_table_size
 
         await self.write(H2Frame(Frame.SETTINGS, Flag.ACK, 0, b""))
         await self.wake()
@@ -586,7 +584,7 @@ class H2Session:
         stream = self.next_stream
         self.next_stream += 2
 
-        connection = H2Connection(self, stream, server=False)
+        connection = H2Connection(self, stream, role=self.role)
         self.streams[stream] = connection
 
         await connection.send_request(message)
@@ -644,14 +642,13 @@ class H2Connection(HTTPConnection):
     REQUEST_PSEUDO  = frozenset({":method", ":scheme", ":path", ":authority"})
     RESPONSE_PSEUDO = frozenset({":status"})
 
-    def __init__(self, session: H2Session, stream: int, *, server: bool):
+    def __init__(self, session: H2Session, stream: int, *, role: HTTPBroadRole):
         super().__init__(("", None), ("", None), transport=session.transport, version="HTTP/2.0", limits=session.limits, observer=session.observer)
 
         self.session = session
         self.id = stream
-        self.server = server
+        self.role = role
 
-        self.headers: List[Tuple[str, str]] = []
         self.trailers: Optional[HTTPHeaders] = None
         self.buffer = bytearray()
         self.counted = 0
@@ -685,10 +682,7 @@ class H2Connection(HTTPConnection):
         self.wake()
 
     def trailer(self, fields: List[Tuple[str, str]]) -> HTTPHeaders:
-        pseudo, regular = self.split(fields)
-
-        if pseudo:
-            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "A trailer section carries a pseudo-header.")
+        pseudo, regular = self.split(fields, trailer=True)
 
         offender = regular.trailing()
 
@@ -703,9 +697,9 @@ class H2Connection(HTTPConnection):
         self.wake()
 
     def absorb(self, fields: List[Tuple[str, str]]):
-        pseudo, regular = self.split(fields)
+        pseudo, regular = self.split(fields, trailer=False)
 
-        if self.server:
+        if self.role == HTTPBroadRole.SERVER:
             self.request = self.request_from(pseudo, regular)
             return
 
@@ -714,7 +708,7 @@ class H2Connection(HTTPConnection):
         if response.status_code >= 200:
             self.response = response
 
-    def split(self, fields: List[Tuple[str, str]]) -> Tuple[Dict[str, str], HTTPHeaders]:
+    def split(self, fields: List[Tuple[str, str]], *, trailer: bool) -> Tuple[Dict[str, str], HTTPHeaders]:
         pseudo: Dict[str, str] = {}
         regular = HTTPHeaders()
         seen_regular = False
@@ -724,6 +718,9 @@ class H2Connection(HTTPConnection):
                 raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The field name {name!r} is not lowercase.")
 
             if name.startswith(":"):
+                if trailer:
+                    raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "A trailer section carries a pseudo-header.")
+
                 if seen_regular:
                     raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "A pseudo-header follows a regular header.")
 
@@ -846,7 +843,7 @@ class H2Connection(HTTPConnection):
         if self.reset_code is not None:
             raise HTTPError(502, f"The peer reset the stream with code {self.reset_code}.")
 
-        message = self.request if self.server else self.response
+        message = self.request if self.role == HTTPBroadRole.SERVER else self.response
 
         if message is None:
             raise HTTPError(502, "The stream ended without a complete message.")
@@ -862,7 +859,7 @@ class H2Connection(HTTPConnection):
         self.observe(message)
         self.state = HTTPState.RECEIVED
 
-        if not self.server:
+        if self.role != HTTPBroadRole.SERVER:
             self.session.forget(self.id)
 
         return message
@@ -875,7 +872,7 @@ class H2Connection(HTTPConnection):
     # -- sending ---------------------------------------------------------
 
     async def send_message(self, message: HTTPMessage, *, final: bool = True):
-        if self.server:
+        if self.role == HTTPBroadRole.SERVER:
             await self.send_response(message)
         else:
             await self.send_request(message)
@@ -995,7 +992,7 @@ class H2Connection(HTTPConnection):
         await self.reset(Code.REFUSED_STREAM)
 
     async def wait(self, value: HTTPState):
-        if value in (HTTPState.RECEIVED, HTTPState.RECEIVED_BODY) and self.request is None and self.server:
+        if value in (HTTPState.RECEIVED, HTTPState.RECEIVED_BODY) and self.request is None and self.role == HTTPBroadRole.SERVER:
             await self.receive_message()
 
         while value in (HTTPState.RECEIVED, HTTPState.RECEIVED_BODY) and not self.ended:

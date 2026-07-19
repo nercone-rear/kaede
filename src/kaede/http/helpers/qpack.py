@@ -1,6 +1,6 @@
 from typing import List, Dict, Tuple
 
-from .hpack import Huffman, Coding, HPACKError, HPACKField, HPACKTable
+from .hpack import Huffman, Coding, HPACKError, HPACKField, HPACKTable, SENSITIVE
 
 class QPACKError(Exception):
     """A malformed QPACK block, which HTTP/3 treats as a QPACK_DECOMPRESSION_FAILED error."""
@@ -111,8 +111,6 @@ STATIC_INDEX: Dict[Tuple[str, str], int] = {pair: number for number, pair in enu
 STATIC_NAMES: Dict[str, int] = {}
 for number, (name, value) in enumerate(STATIC):
     STATIC_NAMES.setdefault(name, number)
-
-SENSITIVE = frozenset({"authorization", "cookie", "set-cookie", "proxy-authorization"})
 
 class QPACKEncoder:
     def encode(self, headers: List[Tuple[str, str]]) -> bytes:

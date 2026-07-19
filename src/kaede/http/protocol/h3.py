@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from ...url import URL
 from ...constants import Digits
 from ...quic.errors import QUICError, QUICClosedError, QUICStreamError
-from ..models import HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
+from ..models import HTTPBroadRole, HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
 from ..errors import HTTPError
 from ..finalizer import finalize_response
 from ..helpers.compression import compress, decompress
@@ -92,9 +92,9 @@ class H3Error(Exception):
         return self.code in Code.STREAMWISE
 
 class H3Session:
-    def __init__(self, connection, *, server: bool, limits, observer=None):
+    def __init__(self, connection, *, role: HTTPBroadRole, limits, observer=None):
         self.connection = connection
-        self.server = server
+        self.role = role
         self.limits = limits
         self.observer = observer
 
@@ -153,7 +153,7 @@ class H3Session:
                     break
 
                 if stream.readable and stream.writable:
-                    connection = H3Connection(self, stream, server=True)
+                    connection = H3Connection(self, stream, role=self.role)
                     task = asyncio.ensure_future(self.dispatch(connection, handler, server))
                 else:
                     task = asyncio.ensure_future(self.consume(stream))
@@ -335,7 +335,7 @@ class H3Session:
     def max_push_id(self, payload: bytes):
         value = self.number(payload, "MAX_PUSH_ID")
 
-        if not self.server:
+        if self.role != HTTPBroadRole.SERVER:
             raise H3Error(Code.FRAME_UNEXPECTED, "A client received a MAX_PUSH_ID frame.")
 
         if self.push_ceiling is not None and value < self.push_ceiling:
@@ -403,7 +403,7 @@ class H3Session:
 
     async def request(self, message: HTTPRequest) -> "H3Connection":
         stream = await self.connection.open()
-        connection = H3Connection(self, stream, server=False)
+        connection = H3Connection(self, stream, role=self.role)
 
         await connection.send_request(message)
         return connection
@@ -424,16 +424,17 @@ class H3Connection(HTTPConnection):
     REQUEST_PSEUDO  = frozenset({":method", ":scheme", ":path", ":authority"})
     RESPONSE_PSEUDO = frozenset({":status"})
 
-    def __init__(self, session: H3Session, stream, *, server: bool):
+    def __init__(self, session: H3Session, stream, *, role: HTTPBroadRole):
         super().__init__(("", None), ("", None), transport=session.connection, version="HTTP/3.0", limits=session.limits, observer=session.observer)
 
         self.session = session
         self.stream = stream
-        self.server = server
+        self.role = role
 
         self.request: Optional[HTTPRequest] = None
         self.response: Optional[HTTPResponse] = None
 
+        self.buffer = bytearray()
         self.replied = False
 
     @property
@@ -480,7 +481,7 @@ class H3Connection(HTTPConnection):
             elif kind in (Kind.SETTINGS, Kind.GOAWAY, Kind.CANCEL_PUSH, Kind.MAX_PUSH_ID):
                 raise H3Error(Code.FRAME_UNEXPECTED, "A control frame arrived on a request stream.")
 
-            elif kind == Kind.PUSH_PROMISE and self.server:
+            elif kind == Kind.PUSH_PROMISE and self.role == HTTPBroadRole.SERVER:
                 raise H3Error(Code.FRAME_UNEXPECTED, "A PUSH_PROMISE frame arrived at a server.")
 
         if fields is None:
@@ -551,7 +552,7 @@ class H3Connection(HTTPConnection):
     def assemble(self, fields: List[Tuple[str, str]], body: bytes, trailers) -> HTTPMessage:
         pseudo, regular = self.split(fields, trailer=False)
 
-        if self.server:
+        if self.role == HTTPBroadRole.SERVER:
             message: HTTPMessage = self.request_from(pseudo, regular)
             self.request = message
         else:
@@ -563,7 +564,7 @@ class H3Connection(HTTPConnection):
         if trailers is not None:
             message.trailers = self.trailer(trailers)
 
-        self.verify(message, body)
+        self.verify(message)
         self.absorb_encoding(message)
         self.observe(message)
 
@@ -632,7 +633,7 @@ class H3Connection(HTTPConnection):
     def lengthless(self, response: HTTPResponse) -> bool:
         return response.status_code < 200 or response.status_code == 204
 
-    def verify(self, message: HTTPMessage, body: bytes):
+    def verify(self, message: HTTPMessage):
         if isinstance(message, HTTPResponse) and self.bodiless(message):
             return
 
@@ -646,7 +647,7 @@ class H3Connection(HTTPConnection):
         if length is None:
             raise H3Error(Code.MESSAGE_ERROR, "Content-Length is malformed.")
 
-        if length != len(body):
+        if length != len(message.body):
             raise H3Error(Code.MESSAGE_ERROR, "Content-Length does not equal the length of the body received.")
 
     def absorb_encoding(self, message: HTTPMessage):
@@ -655,7 +656,7 @@ class H3Connection(HTTPConnection):
             decompress(message, limits=self.limits)
 
     async def send_message(self, message: HTTPMessage, *, final: bool = True):
-        if self.server:
+        if self.role == HTTPBroadRole.SERVER:
             await self.send_response(message)
         else:
             await self.send_request(message)
@@ -773,7 +774,7 @@ class H3Connection(HTTPConnection):
         await self.reset(Code.REQUEST_REJECTED)
 
     async def wait(self, value: HTTPState):
-        if value in (HTTPState.RECEIVED, HTTPState.RECEIVED_BODY) and self.request is None and self.server:
+        if value in (HTTPState.RECEIVED, HTTPState.RECEIVED_BODY) and self.request is None and self.role == HTTPBroadRole.SERVER:
             await self.receive_message()
 
     async def send_raw(self, data: bytes, *, final: bool = True):
@@ -783,12 +784,18 @@ class H3Connection(HTTPConnection):
             self.stream.conclude()
 
     async def receive_raw(self, n: int = -1) -> Optional[bytes]:
-        frame = await self.session.frame(self.stream)
+        if not self.buffer:
+            frame = await self.session.frame(self.stream)
 
-        if frame is None:
-            return b""
+            if frame is None:
+                return b""
 
-        return frame[1]
+            self.buffer += frame[1]
+
+        data = bytes(self.buffer if n < 0 else self.buffer[:n])
+        del self.buffer[:len(data)]
+
+        return data
 
     async def close(self, *, half_close: bool = False, send_pending: bool = False):
         try:

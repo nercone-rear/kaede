@@ -246,7 +246,11 @@ class H1Connection(HTTPConnection):
                 raise HTTPError(400, "A chunk size is not a hexadecimal number.")
 
             if size == 0:
-                self.absorb_trailers(await self.head())
+                message = self.request if self.role == HTTPBroadRole.SERVER else self.response
+
+                if message is not None:
+                    message.trailers = self.trailer(await self.head())
+
                 return bytes(data)
 
             try:
@@ -264,16 +268,13 @@ class H1Connection(HTTPConnection):
             if len(data) > self.limits.max_message_body_size:
                 raise HTTPError(413, "Content Too Large")
 
-    def absorb_trailers(self, trailers: HTTPHeaders):
+    def trailer(self, trailers: HTTPHeaders) -> HTTPHeaders:
         offender = trailers.trailing()
 
         if offender is not None:
             raise HTTPError(400, f"The trailer section carries the forbidden field {offender!r}.")
 
-        message = self.request if self.role == HTTPBroadRole.SERVER else self.response
-
-        if message is not None:
-            message.trailers = trailers
+        return trailers
 
     async def receive_message(self) -> Optional[HTTPMessage]:
         if self.role == HTTPBroadRole.SERVER:
@@ -284,7 +285,7 @@ class H1Connection(HTTPConnection):
 
             chunked, length = self.frame(self.request, request=True)
             self.request.body = await self.body(chunked, length)
-            self.absorb(self.request)
+            self.absorb_encoding(self.request)
             self.received = True
             self.state = HTTPState.RECEIVED
 
@@ -302,7 +303,7 @@ class H1Connection(HTTPConnection):
         chunked, length = self.frame(self.response, request=False)
 
         self.response.body = await self.body(chunked, length)
-        self.absorb(self.response)
+        self.absorb_encoding(self.response)
         self.observe(self.response)
         self.received = True
 
@@ -330,7 +331,7 @@ class H1Connection(HTTPConnection):
 
         return HTTPResponse(version=parts[0], status_code=code, secure=self.secure, headers=await self.head())
 
-    def absorb(self, message: HTTPMessage):
+    def absorb_encoding(self, message: HTTPMessage):
         if isinstance(message.body, bytes) and message.body and "Content-Encoding" in message.headers:
             message.compressed = True
             decompress(message, limits=self.limits)

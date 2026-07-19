@@ -6,15 +6,17 @@ from ...udp import UDPPort, UDPConnection
 from ...udp.errors import UDPError, UDPTimeoutError
 from ..models import DNSMessage
 from ..errors import DNSError, DNSConnectionError, DNSTimeoutError
+from .handler import DNSTransport
 
-class DNSUDPTransport:
-    def __init__(self, dst: Tuple[str, int]):
+class DNSUDPTransport(DNSTransport):
+    def __init__(self, dst: Tuple[str, int], *, retries: int = 2):
         self.dst = dst
+        self.retries = retries
 
-    async def query(self, message: DNSMessage, *, timeout: float = 3.0, retries: int = 2) -> DNSMessage:
+    async def query(self, message: DNSMessage, *, timeout: float = 3.0) -> DNSMessage:
         last: Optional[DNSError] = None
 
-        for _ in range(max(1, retries + 1)):
+        for _ in range(max(1, self.retries + 1)):
             message.id = secrets.randbits(16)
 
             try:
@@ -53,7 +55,7 @@ class DNSUDPTransport:
                 except DNSError:
                     continue
 
-                if DNSUDPTransport.matches(message, response):
+                if message.matches(response):
                     return response
 
         except UDPError as e:
@@ -62,12 +64,5 @@ class DNSUDPTransport:
         finally:
             await connection.close()
 
-    @staticmethod
-    def matches(query: DNSMessage, response: DNSMessage) -> bool:
-        if response.id != query.id or not response.response:
-            return False
-
-        if response.questions:
-            return len(response.questions) == len(query.questions) and all(a.matches(b) for a, b in zip(response.questions, query.questions))
-
-        return DNSMessage.code(response.rcode) != 0
+    async def close(self):
+        return
