@@ -8,8 +8,9 @@ from kaede.tcp import TCPPort
 from kaede.udp import UDPPort
 from kaede.http.models import HTTPPort
 from kaede.http.api.server import HTTPServer, HTTPServerConfig
-from kaede.dns import DNSPort, DNSRecordType, DNSRecords, DNSMessage, DNSClient, DNSClientConfig
+from kaede.dns import DNSPort, DNSRecordType, DNSRecords, DNSMessage, DNSQuestion, DNSClient, DNSClientConfig
 from kaede.dns.protocol.https import DNSHTTPSHandler, DNSHTTPSTransport
+from kaede.dns.api.server import DNSServer, DNSServerConfig, DNSHandler
 from kaede.dns.errors import DNSFormatError
 
 LOCAL = "127.0.0.1"
@@ -24,6 +25,12 @@ def resolve(query: DNSMessage) -> DNSMessage:
             answer.answers.append(record)
 
     return answer
+
+async def serve(connection):
+    """The zone answered through the ordinary DNSConnection handler shape, the same one UDP/TCP/QUIC use."""
+    while True:
+        query = await connection.receive(timeout=5)
+        await connection.send(resolve(query))
 
 class Running:
     def __init__(self, certificate, *, versions=("HTTP/1.1", "HTTP/2.0")):
@@ -107,3 +114,52 @@ class TestDoH:
                 response = await connection.receive()
 
                 assert response.status_code == 415
+
+class TestServerBridge:
+    """DNSServer serves DoH through the same DNSHandler as the other transports (RFC 8484)."""
+
+    async def test_the_bridge_drives_the_ordinary_handler(self):
+        # No TLS here: this exercises the one-shot bridge that turns a DoH query into a
+        # DNSConnection exchange, so it runs everywhere rather than only where QUIC/TLS can.
+        server = DNSServer()
+        server.handler = DNSHandler(serve)
+
+        answer = await server.resolve(DNSMessage(questions=[DNSQuestion("example.test", DNSRecordType.A)]))
+
+        assert answer.id == 0
+        assert answer.answers.first(DNSRecordType.A).data.address == ipaddress.IPv4Address("192.0.2.1")
+
+    async def test_the_bridge_reports_a_handlerless_server(self):
+        server = DNSServer()
+
+        answer = await server.resolve(DNSMessage(questions=[DNSQuestion("example.test", DNSRecordType.A)]))
+
+        assert answer.id == 0
+        assert len(answer.answers) == 0
+
+    async def test_a_client_resolves_through_a_doh_server(self, server_certificate, authority):
+        certfile, keyfile = server_certificate
+
+        config = DNSServerConfig(tls=TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE))
+        server = DNSServer(config=config)
+
+        await server.listen(DNSHandler(serve), [(LOCAL, DNSPort("https", TCPPort(0), True))])
+
+        try:
+            host, port = server.ports[0]
+
+            assert port.type == "https"
+
+            client_config = DNSClientConfig(
+                servers=[(LOCAL, DNSPort("https", int(port.value), True))],
+                timeout=5.0, retries=0, cache=False,
+                tls=TLSConfig(cafile=authority.ca), hostname="localhost"
+            )
+
+            async with DNSClient(config=client_config) as client:
+                records = await client.resolve("example.test", DNSRecordType.A)
+
+                assert [record.data.address for record in records] == [ipaddress.IPv4Address("192.0.2.1")]
+
+        finally:
+            await server.close(timeout=2)
