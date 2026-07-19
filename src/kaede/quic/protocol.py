@@ -7,7 +7,8 @@ from collections import deque
 
 from ..tls.models import TLSConfig
 from ..tls.openssl import VOID_P, Control, Timeval, Result, Certificate, TLSSession
-from ..tls.errors import TLSConfigError, TLSHandshakeError, TLSVerificationError
+from ..tls.errors import TLSConfigError, TLSHandshakeError, TLSVerificationError, TLSECHError
+from ..tls.helpers.ech import ECHConfigList, ECHStatus
 from ..udp.models import UDPPort
 from ..udp.errors import UDPError
 from ..udp.protocol import UDPConnection, UDPProtocol
@@ -277,7 +278,7 @@ class QUICEndpoint:
             if waiter in self.waiters:
                 self.waiters.remove(waiter)
 
-    def open(self, *, hostname: Optional[str] = None) -> "QUICConnection":
+    def open(self, *, hostname: Optional[str] = None, ech: Optional[bytes] = None) -> "QUICConnection":
         pointer = self.context.connection()
 
         self.pointer = pointer
@@ -296,7 +297,7 @@ class QUICEndpoint:
             self.qtls.incoming_streams(pointer, Incoming.ACCEPT, 0)
 
             connection = QUICConnection(self, pointer, dst=(dst[0], UDPPort(dst[1])))
-            connection.prepare(hostname)
+            connection.prepare(hostname, ech)
 
         except BaseException:
             if connection is not None:
@@ -423,6 +424,7 @@ class QUICConnection:
         self.established = False
         self.closed = False
         self.error: Optional[Exception] = None
+        self.ech: Optional[bytes] = None
 
         self.active = time.monotonic()
 
@@ -471,7 +473,43 @@ class QUICConnection:
     def verified(self) -> bool:
         return self.library.get_verify(self.pointer) == 0
 
-    def prepare(self, hostname: Optional[str] = None):
+    @property
+    def ech_status(self) -> Optional[ECHStatus]:
+        if self.ech is None or self.library.get_ech_status is None:
+            return None
+
+        inner = VOID_P()
+        outer = VOID_P()
+        code = self.library.get_ech_status(self.pointer, ctypes.byref(inner), ctypes.byref(outer))
+
+        inner_sni = ctypes.cast(inner, ctypes.c_char_p).value.decode() if inner else None
+        outer_sni = ctypes.cast(outer, ctypes.c_char_p).value.decode() if outer else None
+
+        if inner:
+            self.library.free_pointer(inner, None, 0)
+
+        if outer:
+            self.library.free_pointer(outer, None, 0)
+
+        return ECHStatus(code=code, inner_sni=inner_sni, outer_sni=outer_sni)
+
+    @property
+    def ech_retry_config(self) -> Optional[bytes]:
+        if self.ech is None or self.library.get_ech_retry_config is None:
+            return None
+
+        data = ctypes.POINTER(ctypes.c_ubyte)()
+        length = ctypes.c_size_t(0)
+
+        if self.library.get_ech_retry_config(self.pointer, ctypes.byref(data), ctypes.byref(length)) != 1 or not length.value:
+            return None
+
+        raw = bytes(bytearray(data[:length.value]))
+        self.library.free_pointer(data, None, 0)
+
+        return raw
+
+    def prepare(self, hostname: Optional[str] = None, ech: Optional[bytes] = None):
         context = self.endpoint.context
         verify = context.config.verification(context.server)
         host = hostname
@@ -480,27 +518,37 @@ class QUICConnection:
             if verify != CERT_NONE:
                 raise TLSConfigError("A verifying QUIC client needs a hostname to check the certificate against. Pass a hostname, or set verify_mode to CERT_NONE to connect without checking identity.")
 
-            return
+        else:
+            if host.endswith("."):
+                host = host[:-1]
 
-        if host.endswith("."):
-            host = host[:-1]
+            identity = TLSSession.identity(host)
 
-        identity = TLSSession.identity(host)
+            if not host.replace(".", "").isdigit() and ":" not in host:
+                self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(identity), VOID_P))
 
-        if not host.replace(".", "").isdigit() and ":" not in host:
-            self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(identity), VOID_P))
+            if verify != CERT_NONE:
+                self.library.set_host(self.pointer, identity)
 
-        if verify != CERT_NONE:
-            self.library.set_host(self.pointer, identity)
+        if ech is not None:
+            ECHConfigList.parse(ech) # validate the wire format before handing it to OpenSSL
+
+            if self.library.set_ech_config_list is None:
+                raise TLSConfigError("This OpenSSL does not provide ECH (Encrypted Client Hello): OpenSSL 4.0 or newer is required.")
+
+            if self.library.set_ech_config_list(self.pointer, ech, len(ech)) != 1:
+                raise TLSConfigError(f"OpenSSL rejected the ECH configuration: {self.library.reason()}")
+
+        self.ech = ech
 
     @staticmethod
-    async def connect(transport: UDPConnection, config: Optional[TLSConfig] = None, *, hostname: Optional[str] = None, alpn: Optional[List[str]] = None, timeout: Optional[float] = None, context: Optional[QUICContext] = None) -> "QUICConnection":
+    async def connect(transport: UDPConnection, config: Optional[TLSConfig] = None, *, hostname: Optional[str] = None, ech: Optional[bytes] = None, alpn: Optional[List[str]] = None, timeout: Optional[float] = None, context: Optional[QUICContext] = None) -> "QUICConnection":
         context = context or QUICContext(config or TLSConfig(), server=False, alpn=alpn)
         endpoint = QUICEndpoint(context)
 
         try:
             endpoint.adopt(transport)
-            connection = endpoint.open(hostname=hostname or transport.dst[0])
+            connection = endpoint.open(hostname=hostname or transport.dst[0], ech=ech)
 
             await connection.handshake(timeout)
 
@@ -590,6 +638,12 @@ class QUICConnection:
             self.error = QUICClosedError(f"{origin} closed the connection with the application error 0x{info.code:x}{': ' + reason if reason else ''}.")
 
     def fail(self, message: str):
+        if self.ech is not None:
+            status = self.ech_status
+
+            if status is not None and status.code in (ECHStatus.FAILED_ECH, ECHStatus.FAILED_ECH_BAD_NAME):
+                raise TLSECHError(f"{message}: the server rejected Encrypted Client Hello ({self.library.reason()})", status=status, retry_config=self.ech_retry_config)
+
         code = self.library.get_verify(self.pointer)
         reason = self.library.reason()
 

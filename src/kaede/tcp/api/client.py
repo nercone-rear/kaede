@@ -14,6 +14,7 @@ class TCPClientConfig:
     tls: Optional[TLSConfig] = None
     alpn: Optional[List[str]] = None
     hostname: Optional[str] = None
+    ech: Optional[bytes] = None
 
 class TCPClient:
     def __init__(self, dst: Tuple[str, TCPPort], src: Optional[TCPPort] = None, *, config: Optional[TCPClientConfig] = None):
@@ -30,7 +31,7 @@ class TCPClient:
     async def __aexit__(self, *_):
         await self.close()
 
-    async def open(self, dst: Optional[Tuple[str, TCPPort]] = None, src: Optional[TCPPort] = None, *, hostname: Optional[str] = None) -> Union[TCPConnection, TLSConnection]:
+    async def open(self, dst: Optional[Tuple[str, TCPPort]] = None, src: Optional[TCPPort] = None, *, hostname: Optional[str] = None, ech: Optional[bytes] = None) -> Union[TCPConnection, TLSConnection]:
         dst = self.dst if dst is None else dst
         src = self.src if src is None else TCPPort(src)
 
@@ -39,7 +40,7 @@ class TCPClient:
 
         if self.context is not None:
             try:
-                connection = await TLSConnection.connect(connection, hostname=hostname or self.config.hostname or dst[0], timeout=self.config.connect_timeout, context=self.context)
+                connection = await TLSConnection.connect(connection, hostname=hostname or self.config.hostname or dst[0], ech=ech or self.config.ech, timeout=self.config.connect_timeout, context=self.context)
 
             except BaseException:
                 await connection.close()

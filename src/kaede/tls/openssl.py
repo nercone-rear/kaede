@@ -10,7 +10,8 @@ from ssl import CERT_NONE, CERT_REQUIRED
 from typing import Optional, List, Dict
 
 from .models import TLSVersion, TLSConfig
-from .errors import TLSLibraryNotFoundError, TLSLibraryError, TLSConfigError, TLSHandshakeError, TLSVerificationError, TLSProtocolError, TLSClosedError
+from .errors import TLSLibraryNotFoundError, TLSLibraryError, TLSConfigError, TLSHandshakeError, TLSVerificationError, TLSProtocolError, TLSClosedError, TLSECHError
+from .helpers.ech import ECHConfigList, ECHStatus
 
 VOID_P = ctypes.c_void_p
 
@@ -374,6 +375,16 @@ class OpenSSL:
         self.get_servername  = self.bind(self.ssl, "SSL_get_servername", STR, [VOID_P, INT])
         self.reused          = self.bind(self.ssl, "SSL_session_reused", INT, [VOID_P])
 
+        # ECH (Encrypted Client Hello, RFC 9849). Only present from OpenSSL 4.0 onwards.
+        self.echstore_new         = self.bind(self.ssl, "OSSL_ECHSTORE_new", VOID_P, [VOID_P, STR], required=False)
+        self.echstore_free        = self.bind(self.ssl, "OSSL_ECHSTORE_free", VOID, [VOID_P], required=False)
+        self.echstore_read_pem    = self.bind(self.ssl, "OSSL_ECHSTORE_read_pem", INT, [VOID_P, VOID_P, INT], required=False)
+        self.context_set_echstore = self.bind(self.ssl, "SSL_CTX_set1_echstore", INT, [VOID_P, VOID_P], required=False)
+        self.set_ech_config_list  = self.bind(self.ssl, "SSL_set1_ech_config_list", INT, [VOID_P, STR, SIZE], required=False)
+        self.get_ech_status       = self.bind(self.ssl, "SSL_ech_get1_status", INT, [VOID_P, ctypes.POINTER(VOID_P), ctypes.POINTER(VOID_P)], required=False)
+        self.get_ech_retry_config = self.bind(self.ssl, "SSL_ech_get1_retry_config", INT, [VOID_P, ctypes.POINTER(UCHAR_P), ctypes.POINTER(SIZE)], required=False)
+        self.free_pointer         = self.bind(self.crypto, "CRYPTO_free", VOID, [VOID_P, STR, INT], required=False)
+
     def drain(self) -> List[str]:
         reasons: List[str] = []
         text = ctypes.create_string_buffer(512)
@@ -437,6 +448,7 @@ class TLSContext:
         self.apply_ciphers()
         self.apply_verification()
         self.apply_credentials()
+        self.apply_ech()
         self.apply_alpn()
         self.apply_cookies()
 
@@ -617,6 +629,48 @@ class TLSContext:
         if self.library.context_key_check(self.pointer) != 1:
             raise TLSConfigError(f"The private key {keyfile!r} does not match the certificate: {self.library.reason()}")
 
+    def apply_ech(self):
+        if not self.config.ech_pemfiles:
+            return
+
+        if not self.server:
+            raise TLSConfigError("ech_pemfiles configures a TLS server: a client encrypts its Client Hello with the ECHConfigList passed to session(), not a PEM file.")
+
+        if self.library.echstore_new is None:
+            raise TLSConfigError("This OpenSSL does not provide ECH (Encrypted Client Hello): OpenSSL 4.0 or newer is required.")
+
+        store = self.library.echstore_new(None, None)
+
+        if not store:
+            raise TLSConfigError(f"Could not create the ECH store: {self.library.reason()}")
+
+        try:
+            for path in self.config.ech_pemfiles:
+                try:
+                    with open(path, "rb") as file:
+                        raw = file.read()
+
+                except OSError as error:
+                    raise TLSConfigError(f"Could not read the ECH configuration {path!r}: {error}")
+
+                source = self.library.bio_buffer(raw, len(raw))
+
+                if not source:
+                    raise TLSConfigError(f"Could not buffer the ECH configuration {path!r}: {self.library.reason()}")
+
+                try:
+                    if self.library.echstore_read_pem(store, source, 1) != 1:
+                        raise TLSConfigError(f"Could not load the ECH configuration {path!r}: {self.library.reason()}")
+
+                finally:
+                    self.library.bio_free(source)
+
+            if self.library.context_set_echstore(self.pointer, store) != 1:
+                raise TLSConfigError(f"Could not apply the ECH configuration to the context: {self.library.reason()}")
+
+        finally:
+            self.library.echstore_free(store)
+
     def apply_alpn(self):
         if not self.alpn:
             return
@@ -663,8 +717,8 @@ class TLSContext:
 
         self.library.context_alpn_select(self.pointer, ctypes.cast(callback, VOID_P), None)
 
-    def session(self, *, hostname: Optional[str] = None) -> "TLSSession":
-        return TLSSession(self, hostname=hostname)
+    def session(self, *, hostname: Optional[str] = None, ech: Optional[bytes] = None) -> "TLSSession":
+        return TLSSession(self, hostname=hostname, ech=ech)
 
     def memory(self):
         return self.library.bio_dgram() if self.datagram else self.library.bio_memory()
@@ -680,7 +734,7 @@ class TLSContext:
 class TLSSession:
     link_mtu = 1280
 
-    def __init__(self, context: TLSContext, *, hostname: Optional[str] = None):
+    def __init__(self, context: TLSContext, *, hostname: Optional[str] = None, ech: Optional[bytes] = None):
         self.pointer = None
         self.address = None
 
@@ -689,6 +743,11 @@ class TLSSession:
         self.server = context.server
         self.datagram = context.datagram
         self.hostname = hostname
+
+        if ech is not None:
+            ECHConfigList.parse(ech) # validate the wire format before handing it to OpenSSL
+
+        self.ech = ech
 
         self.established = False
         self.closed = False
@@ -729,18 +788,27 @@ class TLSSession:
             if verify != CERT_NONE:
                 raise TLSConfigError("A verifying TLS client needs a hostname to check the certificate against. Pass a hostname, or set verify_mode to CERT_NONE to connect without checking identity.")
 
-            return
+        else:
+            if host.endswith("."):
+                host = host[:-1]
 
-        if host.endswith("."):
-            host = host[:-1]
+            identity = TLSSession.identity(host)
 
-        identity = TLSSession.identity(host)
+            if not host.replace(".", "").isdigit() and ":" not in host:
+                self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(identity), VOID_P))
 
-        if not host.replace(".", "").isdigit() and ":" not in host:
-            self.library.ctrl(self.pointer, Control.SET_TLSEXT_HOSTNAME, Control.NAMETYPE_HOST, ctypes.cast(ctypes.c_char_p(identity), VOID_P))
+            if verify != CERT_NONE:
+                self.library.set_host(self.pointer, identity)
 
-        if verify != CERT_NONE:
-            self.library.set_host(self.pointer, identity)
+        if self.ech is not None:
+            self.apply_ech()
+
+    def apply_ech(self):
+        if self.library.set_ech_config_list is None:
+            raise TLSConfigError("This OpenSSL does not provide ECH (Encrypted Client Hello): OpenSSL 4.0 or newer is required.")
+
+        if self.library.set_ech_config_list(self.pointer, self.ech, len(self.ech)) != 1:
+            raise TLSConfigError(f"OpenSSL rejected the ECH configuration: {self.library.reason()}")
 
     def feed(self, data: bytes):
         if not data:
@@ -886,6 +954,12 @@ class TLSSession:
         self.closed = True
 
     def fail(self, message: str):
+        if self.ech is not None:
+            status = self.ech_status
+
+            if status is not None and status.code in (ECHStatus.FAILED_ECH, ECHStatus.FAILED_ECH_BAD_NAME):
+                raise TLSECHError(f"{message}: the server rejected Encrypted Client Hello ({self.library.reason()})", status=status, retry_config=self.ech_retry_config)
+
         code = self.library.get_verify(self.pointer)
         reason = self.library.reason()
 
@@ -953,6 +1027,42 @@ class TLSSession:
     @property
     def reused(self) -> bool:
         return bool(self.pointer) and bool(self.library.reused(self.pointer))
+
+    @property
+    def ech_status(self) -> Optional[ECHStatus]:
+        if not self.pointer or self.ech is None or self.library.get_ech_status is None:
+            return None
+
+        inner = VOID_P()
+        outer = VOID_P()
+        code = self.library.get_ech_status(self.pointer, ctypes.byref(inner), ctypes.byref(outer))
+
+        inner_sni = ctypes.cast(inner, ctypes.c_char_p).value.decode() if inner else None
+        outer_sni = ctypes.cast(outer, ctypes.c_char_p).value.decode() if outer else None
+
+        if inner:
+            self.library.free_pointer(inner, None, 0)
+
+        if outer:
+            self.library.free_pointer(outer, None, 0)
+
+        return ECHStatus(code=code, inner_sni=inner_sni, outer_sni=outer_sni)
+
+    @property
+    def ech_retry_config(self) -> Optional[bytes]:
+        if not self.pointer or self.ech is None or self.library.get_ech_retry_config is None:
+            return None
+
+        data = ctypes.POINTER(ctypes.c_ubyte)()
+        length = ctypes.c_size_t(0)
+
+        if self.library.get_ech_retry_config(self.pointer, ctypes.byref(data), ctypes.byref(length)) != 1 or not length.value:
+            return None
+
+        raw = bytes(bytearray(data[:length.value]))
+        self.library.free_pointer(data, None, 0)
+
+        return raw
 
     def free(self):
         if self.pointer:
