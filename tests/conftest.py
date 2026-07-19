@@ -136,4 +136,9 @@ class ECHKeys:
 
 @pytest.fixture(scope="session")
 def ech_keys(tmp_path_factory):
+    from kaede.tls.openssl import OpenSSL
+
+    if OpenSSL().set_ech_config_list is None:
+        pytest.skip("ECH needs OpenSSL 4.0 or newer")
+
     return ECHKeys(tmp_path_factory.mktemp("ech"))
