@@ -405,7 +405,7 @@ class H3Session:
         stream = await self.connection.open()
         connection = H3Connection(self, stream, server=False)
 
-        await connection.deliver_request(message)
+        await connection.send_request(message)
         return connection
 
     async def shutdown(self):
@@ -658,9 +658,9 @@ class H3Connection(HTTPConnection):
         if self.server:
             await self.send_response(message)
         else:
-            await self.deliver_request(message)
+            await self.send_request(message)
 
-    async def deliver_request(self, request: HTTPRequest):
+    async def send_request(self, request: HTTPRequest):
         url = request.url
         authority = request.headers.get("Host", "") or (url.netloc if url else "")
 
@@ -761,13 +761,16 @@ class H3Connection(HTTPConnection):
             await self.send_response(HTTPResponse(version="HTTP/3.0", status_code=code, headers=headers or HTTPHeaders(), body=b"", compression=False))
 
         except (HTTPError, H3Error, QUICError):
-            self.stream.reset(Code.INTERNAL_ERROR)
+            await self.reset(Code.INTERNAL_ERROR)
+
+    async def reset(self, code: int = Code.REQUEST_CANCELLED):
+        self.stream.reset(code)
 
     async def accept(self):
         return
 
     async def reject(self):
-        self.stream.reset(Code.REQUEST_REJECTED)
+        await self.reset(Code.REQUEST_REJECTED)
 
     async def wait(self, value: HTTPState):
         if value in (HTTPState.RECEIVED, HTTPState.RECEIVED_BODY) and self.request is None and self.server:

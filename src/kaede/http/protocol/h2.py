@@ -15,8 +15,6 @@ from ..helpers.compression import compress, decompress
 from ..helpers.hpack import HPACKEncoder, HPACKDecoder, HPACKError
 from .connection import HTTPConnection, HTTPState
 
-PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-
 class Frame:
     DATA          = 0x0
     HEADERS       = 0x1
@@ -117,6 +115,7 @@ class H2Settings:
 
 class H2Session:
     CEILING = 0x7FFFFFFF
+    PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
     def __init__(self, transport, *, server: bool, limits, settings: Optional[H2Settings] = None, observer=None):
         self.transport = transport
@@ -172,12 +171,12 @@ class H2Session:
 
     async def start(self):
         if self.server:
-            preface = await self.transport.receive_exactly(len(PREFACE))
+            preface = await self.transport.receive_exactly(len(H2Session.PREFACE))
 
-            if preface != PREFACE:
+            if preface != H2Session.PREFACE:
                 raise H2Error(Code.PROTOCOL_ERROR, "The client preface is wrong.")
         else:
-            await self.transport.send(PREFACE)
+            await self.transport.send(H2Session.PREFACE)
 
         await self.write(H2Frame(Frame.SETTINGS, 0, 0, self.local.pack()))
 
@@ -590,7 +589,7 @@ class H2Session:
         connection = H2Connection(self, stream, server=False)
         self.streams[stream] = connection
 
-        await connection.deliver_request(message)
+        await connection.send_request(message)
         return connection
 
     async def send_headers(self, stream: int, fields: List[Tuple[str, str]], *, end_stream: bool):
@@ -879,9 +878,9 @@ class H2Connection(HTTPConnection):
         if self.server:
             await self.send_response(message)
         else:
-            await self.deliver_request(message)
+            await self.send_request(message)
 
-    async def deliver_request(self, request: HTTPRequest):
+    async def send_request(self, request: HTTPRequest):
         url = request.url
         authority = request.headers.get("Host", "") or (url.netloc if url else "")
 
