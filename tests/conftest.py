@@ -47,14 +47,21 @@ class Authority:
         return os.path.join(self.directory, name)
 
     def run(self, *arguments):
-        subprocess.run([self.openssl, *arguments], check=True, capture_output=True)
+        result = subprocess.run([self.openssl, *arguments], capture_output=True)
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"{self.openssl} {' '.join(arguments)} failed with exit code {result.returncode}:\n"
+                f"{result.stderr.decode(errors='replace')}"
+            )
 
     def build(self):
         self.run(
             "req", "-x509", "-newkey", "rsa:2048", "-nodes",
             "-keyout", self.ca_key, "-out", self.ca,
             "-subj", "/CN=Kaede Test CA", "-days", "1",
-            "-addext", "basicConstraints=critical,CA:TRUE"
+            "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign"
         )
 
     def issue(self, name: str, hosts: str, *, days: int = 1, expired: bool = False):
