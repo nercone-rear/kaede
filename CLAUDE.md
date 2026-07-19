@@ -239,3 +239,4 @@ Fortunately, I have created a GitHub repository to pre-build OpenSSL for Kaede d
 
 If a suitable version of OpenSSL is not installed, please obtain a binary from nercone-rear/openssl.
 Please note that you may need to execute add_repo to retrieve binaries from external repositories like nercone-rear/openssl. In most cases, this will be approved by the user or automatically approved by the system.
+Each release also includes SHA256SUMS/SHA384SUMS/SHA512SUMS files, so please make sure to verify them after downloading.
