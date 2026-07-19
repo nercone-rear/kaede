@@ -25,3 +25,11 @@ class TLSClosedError(TLSError):
 
 class TLSProtocolError(TLSError):
     """An exception that occurs when OpenSSL reports a protocol level failure."""
+
+class TLSECHError(TLSHandshakeError):
+    """An exception that occurs when the server rejects Encrypted Client Hello."""
+
+    def __init__(self, message: str, status=None, retry_config=None):
+        self.status = status
+        self.retry_config = retry_config
+        super().__init__(message)

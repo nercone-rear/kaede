@@ -328,6 +328,7 @@ class QUICContext(TLSContext):
         self.apply_ciphers()
         self.apply_verification()
         self.apply_credentials()
+        self.apply_ech()
         self.apply_alpn()
 
     def apply_ciphers(self):

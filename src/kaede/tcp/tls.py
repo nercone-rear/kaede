@@ -56,10 +56,18 @@ class TLSConnection:
     def truncated(self) -> bool:
         return self.session.truncated
 
+    @property
+    def ech_status(self):
+        return self.session.ech_status
+
+    @property
+    def ech_retry_config(self) -> Optional[bytes]:
+        return self.session.ech_retry_config
+
     @staticmethod
-    async def connect(transport: TCPConnection, config: Optional[TLSConfig] = None, *, hostname: Optional[str] = None, alpn: Optional[List[str]] = None, timeout: Optional[float] = None, context: Optional[TLSContext] = None) -> "TLSConnection":
+    async def connect(transport: TCPConnection, config: Optional[TLSConfig] = None, *, hostname: Optional[str] = None, ech: Optional[bytes] = None, alpn: Optional[List[str]] = None, timeout: Optional[float] = None, context: Optional[TLSContext] = None) -> "TLSConnection":
         context = context or TLSContext(config or TLSConfig(), server=False, alpn=alpn)
-        connection = TLSConnection(transport, context.session(hostname=hostname or transport.dst[0]), context)
+        connection = TLSConnection(transport, context.session(hostname=hostname or transport.dst[0], ech=ech), context)
 
         await connection.handshake(timeout)
         return connection

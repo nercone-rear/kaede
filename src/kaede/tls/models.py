@@ -234,6 +234,8 @@ class TLSConfig:
     verify_mode:  Optional[ssl.VerifyMode] = None
     verify_flags: ssl.VerifyFlags          = ssl.VerifyFlags.VERIFY_X509_TRUSTED_FIRST
 
+    ech_pemfiles: List[str] = field(default_factory=list) # server: PEM files carrying an ECHConfig and its private key (as produced by `openssl ech`)
+
     groups: List[TLSGroup] = field(default_factory=lambda: [
         # PQC (Hybrid)
         TLSGroup.X25519MLKEM768,

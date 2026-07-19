@@ -232,3 +232,32 @@ class TestFrames:
         assert wire[4] == 0x1
         assert int.from_bytes(wire[5:9], "big") == 3
         assert wire[9:] == b"hi"
+
+class TestECH:
+    async def test_the_client_hello_is_encrypted_over_h2(self, server_certificate, authority, ech_keys):
+        server_certfile, server_keyfile = server_certificate
+
+        config = HTTPServerConfig(versions=["HTTP/1.1", "HTTP/2.0"])
+        config.tls = TLSConfig(certfile=server_certfile, keyfile=server_keyfile, verify_mode=CERT_NONE, ech_pemfiles=[ech_keys.pemfile])
+
+        server = HTTPServer(config=config)
+
+        try:
+            await server.listen(Echo(), [(LOCAL, HTTPPort("tcp", TCPPort(0), True))])
+
+            client_config = HTTPClientConfig(versions=["HTTP/2.0", "HTTP/1.1"], connect_timeout=5)
+            client_config.tls = TLSConfig(cafile=authority.ca)
+            client_config.ech = ech_keys.configlist
+
+            async with HTTPClient(config=client_config) as http:
+                connection = await http.get(endpoint(server) + "/hello")
+                response = await connection.receive()
+
+                assert response.status_code == 200
+
+                session, _ = next(iter(http.sessions.values()))
+                assert session.transport.ech_status.succeeded
+                assert session.transport.ech_status.outer_sni == ech_keys.public_name
+
+        finally:
+            await server.close(timeout=2)

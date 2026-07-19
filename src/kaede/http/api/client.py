@@ -29,6 +29,7 @@ class HTTPClientConfig:
     limits: HTTPLimits = field(default_factory=lambda: HTTPLimits())
 
     tls: Union[TLSConfig, Dict[str, TLSConfig]] = field(default_factory=lambda: TLSConfig()) # TLSConfig or {hostname: TLSConfig, ...}
+    ech: Union[None, bytes, Dict[str, bytes]] = None # ECHConfigList or {hostname: ECHConfigList, ...}, e.g. from HTTPSRecordProbe.ech()
 
     connect_timeout: Optional[float] = 30.0
 
@@ -61,6 +62,12 @@ class HTTPClient:
             return self.config.tls.get(host) or self.config.tls.get("*") or next(iter(self.config.tls.values()), None) or TLSConfig()
 
         return self.config.tls or TLSConfig()
+
+    def ech(self, host: str) -> Optional[bytes]:
+        if isinstance(self.config.ech, dict):
+            return self.config.ech.get(host) or self.config.ech.get("*")
+
+        return self.config.ech
 
     def alpn(self) -> List[str]:
         offer: List[str] = []
@@ -177,7 +184,7 @@ class HTTPClient:
 
         client = QUICClient((host, UDPPort(port)), config=QUICClientConfig(
             connect_timeout=timeout if timeout is not None else self.config.connect_timeout,
-            tls=self.credentials(host), alpn=["h3"], hostname=host
+            tls=self.credentials(host), alpn=["h3"], hostname=host, ech=self.ech(host)
         ))
 
         try:
@@ -233,7 +240,7 @@ class HTTPClient:
 
             if secure:
                 context = TLSContext(self.credentials(host), server=False, alpn=alpn)
-                transport = await TLSConnection.connect(transport, hostname=host, timeout=connect_timeout, context=context)
+                transport = await TLSConnection.connect(transport, hostname=host, ech=self.ech(host), timeout=connect_timeout, context=context)
 
         except (TCPError, TLSError) as e:
             await transport.close()

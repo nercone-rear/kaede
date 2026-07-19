@@ -7,7 +7,8 @@ import pytest
 
 from kaede.tls import TLSVersion, TLSGroup, TLSCipher, TLSConfig
 from kaede.tls.openssl import OpenSSL, TLSContext, TLSSession, ALPN, Protocol, Control
-from kaede.tls.errors import TLSConfigError, TLSHandshakeError, TLSVerificationError, TLSLibraryError
+from kaede.tls.errors import TLSConfigError, TLSHandshakeError, TLSVerificationError, TLSLibraryError, TLSECHError
+from kaede.tls.helpers.ech import ECHConfigList, ECHStatus
 
 # The two sessions are wired to each other through their memory BIOs, so a full
 # RFC 8446 handshake is exercised without any socket being involved.
@@ -34,7 +35,7 @@ def pump(client: TLSSession, server: TLSSession, rounds: int = 20) -> bool:
 
     return False
 
-def pair(library, server_certificate, *, client=None, server=None, hostname="localhost", alpn=None, ca=None):
+def pair(library, server_certificate, *, client=None, server=None, hostname="localhost", alpn=None, ca=None, ech=None):
     certfile, keyfile = server_certificate
 
     client = client or TLSConfig()
@@ -49,7 +50,7 @@ def pair(library, server_certificate, *, client=None, server=None, hostname="loc
     client_context = TLSContext(client, server=False, alpn=alpn, library=library)
     server_context = TLSContext(server, server=True, alpn=alpn, library=library)
 
-    return client_context.session(hostname=hostname), server_context.session(), (client_context, server_context)
+    return client_context.session(hostname=hostname, ech=ech), server_context.session(), (client_context, server_context)
 
 class TestLibrary:
     def test_reports_a_supported_version(self, library):
@@ -472,5 +473,126 @@ class TestConstructionFailure:
             TLSContext()
 
         gc.collect()
-
         assert not captured, f"__del__ raised while collecting a half-built TLSContext: {[str(item.exc_value) for item in captured]}"
+
+class TestECHConfigList:
+    def test_parses_the_public_name_out_of_a_real_configlist(self, ech_keys):
+        configs = ECHConfigList.parse(ech_keys.configlist)
+
+        assert len(configs) == 1
+        assert configs[0].version == ECHConfigList.RFC9849_VERSION
+        assert configs[0].public_name == ech_keys.public_name
+
+    def test_rejects_an_empty_value(self):
+        with pytest.raises(TLSConfigError):
+            ECHConfigList.parse(b"")
+
+    def test_rejects_a_wrong_length_prefix(self, ech_keys):
+        raw = ech_keys.configlist
+
+        with pytest.raises(TLSConfigError):
+            ECHConfigList.parse(raw[:1] + bytes([raw[1] + 1]) + raw[2:])
+
+    def test_rejects_a_truncated_config(self, ech_keys):
+        with pytest.raises(TLSConfigError):
+            ECHConfigList.parse(ech_keys.configlist[:-1])
+
+    def test_skips_an_unsupported_version_and_then_has_nothing_left(self):
+        # A 2-byte outer length, one ECHConfig entry tagged with an unknown
+        # version and an empty body: structurally valid, but nothing usable.
+        body = (0xdead).to_bytes(2, "big") + (0).to_bytes(2, "big")
+        raw = len(body).to_bytes(2, "big") + body
+
+        with pytest.raises(TLSConfigError):
+            ECHConfigList.parse(raw)
+
+class TestECH:
+    def test_a_client_and_server_agree_on_the_encrypted_hello(self, library, server_certificate, authority, ech_keys):
+        server = TLSConfig(ech_pemfiles=[ech_keys.pemfile])
+        client, server_session, _ = pair(library, server_certificate, server=server, ca=authority.ca, ech=ech_keys.configlist)
+
+        assert pump(client, server_session)
+        assert client.verified
+
+        status = client.ech_status
+        assert status.succeeded
+        assert status.inner_sni == "localhost"
+        assert status.outer_sni == ech_keys.public_name
+
+        assert server_session.servername == "localhost"
+
+    def test_a_session_without_ech_reports_no_status(self, library, server_certificate, authority):
+        client, server, _ = pair(library, server_certificate, ca=authority.ca)
+        assert pump(client, server)
+
+        assert client.ech_status is None
+        assert client.ech_retry_config is None
+
+    def test_a_server_unaware_of_ech_does_not_silently_downgrade(self, library, server_certificate, ech_keys):
+        # RFC 9849 section 6.1.3: a client must not fall back to revealing the
+        # real name in cleartext just because ECH went unanswered, so a server
+        # that never heard of ECH cannot complete the handshake as if nothing
+        # had happened - the connection has to fail rather than downgrade.
+        client_config = TLSConfig(verify_mode=CERT_NONE)
+        client, server_session, _ = pair(library, server_certificate, client=client_config, ech=ech_keys.configlist, hostname="localhost")
+
+        with pytest.raises(TLSHandshakeError):
+            pump(client, server_session)
+
+        # And the server, having never understood the extension, only ever
+        # saw the cleartext outer name - the real "localhost" name never reached it.
+        assert server_session.servername == ech_keys.public_name
+
+    def test_a_corrupted_config_is_rejected_with_a_retry_config(self, library, server_certificate, ech_keys):
+        # No certificate authority is involved here: with verification off on
+        # both ends, OpenSSL still hands back a fresh ECHConfigList to retry
+        # with, which is exactly the "fix yourself and reconnect" signal a
+        # client that hit a stale or corrupted config needs.
+        corrupted = bytearray(ech_keys.configlist)
+        corrupted[20] ^= 0xff  # deep inside the HPKE public key, keeps every length field intact
+
+        server = TLSConfig(verify_mode=CERT_NONE, ech_pemfiles=[ech_keys.pemfile])
+        client = TLSConfig(verify_mode=CERT_NONE)
+        client_session, server_session, _ = pair(library, server_certificate, client=client, server=server, ech=bytes(corrupted))
+
+        with pytest.raises(TLSECHError) as caught:
+            pump(client_session, server_session)
+
+        assert caught.value.status.code in (ECHStatus.FAILED_ECH, ECHStatus.FAILED_ECH_BAD_NAME)
+        assert caught.value.retry_config  # the server hands back a usable config to retry with
+        ECHConfigList.parse(caught.value.retry_config)  # and it is well formed
+
+    def test_ech_pemfiles_is_rejected_on_a_client_context(self, library):
+        with pytest.raises(TLSConfigError):
+            TLSContext(TLSConfig(ech_pemfiles=["/nonexistent/ech.pem"]), server=False, library=library)
+
+    def test_a_missing_ech_pemfile_is_rejected(self, library, server_certificate):
+        certfile, keyfile = server_certificate
+        config = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, ech_pemfiles=["/nonexistent/ech.pem"])
+
+        with pytest.raises(TLSConfigError):
+            TLSContext(config, server=True, library=library)
+
+    def test_a_malformed_configlist_is_rejected_before_reaching_openssl(self, library):
+        context = TLSContext(TLSConfig(verify_mode=CERT_NONE), library=library)
+
+        with pytest.raises(TLSConfigError):
+            context.session(hostname="localhost", ech=b"not a real ECHConfigList")
+
+    def test_ech_requires_openssl_4_0(self, library, monkeypatch, server_certificate, ech_keys):
+        # Simulate an OpenSSL older than 4.0, which does not export the ECH API.
+        monkeypatch.setattr(library, "set_ech_config_list", None)
+
+        context = TLSContext(TLSConfig(verify_mode=CERT_NONE), library=library)
+
+        with pytest.raises(TLSConfigError):
+            context.session(hostname="localhost", ech=ech_keys.configlist)
+
+    def test_ech_pemfiles_requires_openssl_4_0(self, library, monkeypatch, server_certificate, ech_keys):
+        monkeypatch.setattr(library, "echstore_new", None)
+
+        certfile, keyfile = server_certificate
+        config = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, ech_pemfiles=[ech_keys.pemfile])
+
+        with pytest.raises(TLSConfigError):
+            TLSContext(config, server=True, library=library)

@@ -5,7 +5,7 @@ from ssl import CERT_NONE
 import pytest
 
 from kaede.tls import TLSConfig, TLSGroup
-from kaede.tls.errors import TLSError, TLSVerificationError
+from kaede.tls.errors import TLSError, TLSVerificationError, TLSECHError
 from kaede.tcp import TCPPort, TCPClient, TCPServer, TCPServerConfig, TCPHandler
 from kaede.tcp.api.client import TCPClientConfig
 from kaede.tcp.errors import TCPClosedError
@@ -15,11 +15,11 @@ LOCAL = "127.0.0.1"
 class Running:
     """A TLS enabled TCPServer on an ephemeral port."""
 
-    def __init__(self, on_connection, certificate, *, alpn=None):
+    def __init__(self, on_connection, certificate, *, alpn=None, ech_pemfiles=None):
         certfile, keyfile = certificate
 
         config = TCPServerConfig()
-        config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE)
+        config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, ech_pemfiles=ech_pemfiles or [])
         config.alpn = alpn
 
         self.server = TCPServer(config)
@@ -32,11 +32,12 @@ class Running:
     async def __aexit__(self, *_):
         await self.server.close(timeout=2)
 
-def client(server, authority, *, alpn=None, hostname="localhost", verify=True):
+def client(server, authority, *, alpn=None, hostname="localhost", verify=True, ech=None):
     config = TCPClientConfig(connect_timeout=5)
     config.tls = TLSConfig(cafile=authority.ca) if verify else TLSConfig(verify_mode=CERT_NONE)
     config.alpn = alpn
     config.hostname = hostname
+    config.ech = ech
 
     return TCPClient(server.ports[0], config=config)
 
@@ -302,3 +303,36 @@ class TestClosing:
 
             await connection.close()
             await connection.close()
+
+class TestECH:
+    async def test_a_real_connection_encrypts_the_client_hello(self, server_certificate, authority, ech_keys):
+        async with Running(upper, server_certificate, ech_pemfiles=[ech_keys.pemfile]) as server:
+            async with client(server, authority, ech=ech_keys.configlist) as connection:
+                await connection.send(b"hello")
+                assert await connection.receive_exactly(5) == b"HELLO"
+
+                assert connection.ech_status.succeeded
+                assert connection.ech_status.inner_sni == "localhost"
+                assert connection.ech_status.outer_sni == ech_keys.public_name
+
+    async def test_a_server_without_ech_configured_does_not_downgrade(self, server_certificate, authority, ech_keys):
+        # The server here never received ech_pemfiles, so it cannot decrypt the
+        # inner Client Hello: the client must fail rather than proceed in the clear.
+        async with Running(upper, server_certificate) as server:
+            with pytest.raises(TLSError):
+                await client(server, authority, ech=ech_keys.configlist, verify=False).open(hostname="localhost")
+
+    async def test_a_stale_config_is_rejected_with_a_retry_config(self, server_certificate, ech_keys):
+        corrupted = bytearray(ech_keys.configlist)
+        corrupted[20] ^= 0xff
+
+        async with Running(upper, server_certificate, ech_pemfiles=[ech_keys.pemfile]) as server:
+            config = TCPClientConfig(connect_timeout=5)
+            config.tls = TLSConfig(verify_mode=CERT_NONE)
+            config.hostname = "localhost"
+            config.ech = bytes(corrupted)
+
+            with pytest.raises(TLSECHError) as caught:
+                await TCPClient(server.ports[0], config=config).open()
+
+            assert caught.value.retry_config

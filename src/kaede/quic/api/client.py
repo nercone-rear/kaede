@@ -15,6 +15,7 @@ class QUICClientConfig:
 
     alpn: Optional[List[str]] = None
     hostname: Optional[str] = None
+    ech: Optional[bytes] = None
 
 class QUICClient:
     def __init__(self, dst: Tuple[str, UDPPort], src: Optional[UDPPort] = None, *, config: Optional[QUICClientConfig] = None):
@@ -31,7 +32,7 @@ class QUICClient:
     async def __aexit__(self, *_):
         await self.close()
 
-    async def open(self, dst: Optional[Tuple[str, UDPPort]] = None, src: Optional[UDPPort] = None, *, hostname: Optional[str] = None) -> QUICConnection:
+    async def open(self, dst: Optional[Tuple[str, UDPPort]] = None, src: Optional[UDPPort] = None, *, hostname: Optional[str] = None, ech: Optional[bytes] = None) -> QUICConnection:
         dst = self.dst if dst is None else dst
         src = self.src if src is None else UDPPort(src)
 
@@ -39,7 +40,7 @@ class QUICClient:
         await transport.connect(self.config.connect_timeout)
 
         try:
-            connection = await QUICConnection.connect(transport, hostname=hostname or self.config.hostname or dst[0], timeout=self.config.connect_timeout, context=self.context)
+            connection = await QUICConnection.connect(transport, hostname=hostname or self.config.hostname or dst[0], ech=ech or self.config.ech, timeout=self.config.connect_timeout, context=self.context)
 
         except BaseException:
             await transport.close()
