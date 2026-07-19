@@ -236,9 +236,10 @@ If the appropriate version of OpenSSL is not available in your sandbox environme
 
 Additionally, when you submit a pull request, automated tests via pytest using the latest OpenSSL will be executed on GitHub Actions.
 While these are only supplementary as they are automated tests, they will be useful for minimal functional testing using the latest OpenSSL.
+The GitHub Actions workflows (`.github/workflows/test.yml`, `.github/workflows/release.yml`) do not build OpenSSL from source; they download pre-built OpenSSL binaries from https://github.com/nercone-rear/openssl (a repository that periodically builds the latest stable OpenSSL 3.x/4.x releases for Linux/macOS/Windows and publishes them as GitHub Releases), verifying each download against the release's `SHA256SUMS`.
 
 If you wish to verify functionality before submitting a pull request, you can also read the OpenSSL source code directly (this applies to open source software in general, not just OpenSSL).
 Please note that this method consumes a large amount of the context window and should not be used excessively, but it is one approach to keep in mind.
 
 By the way, since the sandbox performance is not very high, building OpenSSL from source is not recommended.
-You should either use the methods mentioned above or download a pre-built version.
+You should either use the methods mentioned above or download a pre-built version, e.g. from https://github.com/nercone-rear/openssl/releases, the same source used by CI.

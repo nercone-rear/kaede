@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-openssl-3:
+  fetch-openssl-3:
     runs-on: ubuntu-latest
 
     outputs:
@@ -25,32 +25,33 @@ jobs:
       - name: Resolve latest OpenSSL 3.x version
         id: openssl-version
         run: |
-          VERSION=$(gh api repos/openssl/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-3\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
+          VERSION=$(gh api repos/nercone-rear/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-3\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
           echo "Resolved OpenSSL ${VERSION}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v4" >> $GITHUB_OUTPUT
+          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v5" >> $GITHUB_OUTPUT
 
-      - name: Cache OpenSSL build
+      - name: Cache OpenSSL
         id: cache-openssl
         uses: actions/cache@v4
         with:
           path: ~/openssl-3
           key: ${{ steps.openssl-version.outputs.cache-key }}
 
-      - name: Build OpenSSL ${{ steps.openssl-version.outputs.version }}
+      - name: Download OpenSSL ${{ steps.openssl-version.outputs.version }}
         if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           VERSION="${{ steps.openssl-version.outputs.version }}"
-          sudo apt-get update -q
-          sudo apt-get install -y build-essential
-          curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-${VERSION}/openssl-${VERSION}.tar.gz" \
-            | tar xz
-          cd "openssl-${VERSION}"
-          ./Configure --prefix="$HOME/openssl-3" --openssldir="$HOME/openssl-3" --libdir=lib shared no-docs
-          make -j$(nproc)
-          make install_sw install_ssldirs
+          ARCH="$(uname -m)"
+          ASSET="openssl-${VERSION}-linux-${ARCH}.tar.gz"
+          BASE_URL="https://github.com/nercone-rear/openssl/releases/download/openssl-${VERSION}"
+          curl -fsSL -o "${ASSET}" "${BASE_URL}/${ASSET}"
+          curl -fsSL -o SHA256SUMS "${BASE_URL}/SHA256SUMS"
+          grep " ${ASSET}\$" SHA256SUMS | sha256sum -c -
+          mkdir -p "$HOME/openssl-3"
+          tar -xzf "${ASSET}" -C "$HOME/openssl-3" --strip-components=1
 
-  build-openssl-4:
+  fetch-openssl-4:
     runs-on: ubuntu-latest
 
     outputs:
@@ -64,33 +65,34 @@ jobs:
       - name: Resolve latest OpenSSL 4.x version
         id: openssl-version
         run: |
-          VERSION=$(gh api repos/openssl/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-4\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
+          VERSION=$(gh api repos/nercone-rear/openssl/releases --paginate -q '[.[] | select(.prerelease == false and .draft == false) | select(.tag_name | test("^openssl-4\\.")) | .tag_name] | first // empty | ltrimstr("openssl-")' | head -1)
           echo "Resolved OpenSSL ${VERSION}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v4" >> $GITHUB_OUTPUT
+          echo "cache-key=openssl-${VERSION}-${{ runner.os }}-v5" >> $GITHUB_OUTPUT
 
-      - name: Cache OpenSSL build
+      - name: Cache OpenSSL
         id: cache-openssl
         uses: actions/cache@v4
         with:
           path: ~/openssl-4
           key: ${{ steps.openssl-version.outputs.cache-key }}
 
-      - name: Build OpenSSL ${{ steps.openssl-version.outputs.version }}
+      - name: Download OpenSSL ${{ steps.openssl-version.outputs.version }}
         if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           VERSION="${{ steps.openssl-version.outputs.version }}"
-          sudo apt-get update -q
-          sudo apt-get install -y build-essential
-          curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-${VERSION}/openssl-${VERSION}.tar.gz" \
-            | tar xz
-          cd "openssl-${VERSION}"
-          ./Configure --prefix="$HOME/openssl-4" --openssldir="$HOME/openssl-4" --libdir=lib shared no-docs
-          make -j$(nproc)
-          make install_sw install_ssldirs
+          ARCH="$(uname -m)"
+          ASSET="openssl-${VERSION}-linux-${ARCH}.tar.gz"
+          BASE_URL="https://github.com/nercone-rear/openssl/releases/download/openssl-${VERSION}"
+          curl -fsSL -o "${ASSET}" "${BASE_URL}/${ASSET}"
+          curl -fsSL -o SHA256SUMS "${BASE_URL}/SHA256SUMS"
+          grep " ${ASSET}\$" SHA256SUMS | sha256sum -c -
+          mkdir -p "$HOME/openssl-4"
+          tar -xzf "${ASSET}" -C "$HOME/openssl-4" --strip-components=1
 
   test-linux:
-    needs: [build-openssl-3, build-openssl-4]
+    needs: [fetch-openssl-3, fetch-openssl-4]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -100,25 +102,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore OpenSSL 3 build cache
+      - name: Restore OpenSSL 3 cache
         if: matrix.openssl-version == 3
         uses: actions/cache/restore@v4
         with:
           path: ~/openssl-3
-          key: ${{ needs.build-openssl-3.outputs.cache-key }}
+          key: ${{ needs.fetch-openssl-3.outputs.cache-key }}
           fail-on-cache-miss: true
 
-      - name: Restore OpenSSL 4 build cache
+      - name: Restore OpenSSL 4 cache
         if: matrix.openssl-version == 4
         uses: actions/cache/restore@v4
         with:
           path: ~/openssl-4
-          key: ${{ needs.build-openssl-4.outputs.cache-key }}
+          key: ${{ needs.fetch-openssl-4.outputs.cache-key }}
           fail-on-cache-miss: true
 
       - name: Register OpenSSL and Set KAEDE_OPENSSL
         run: |
-          LIBDIR="$HOME/openssl-${{ matrix.openssl-version }}/lib"
+          LIBDIR="$HOME/openssl-${{ matrix.openssl-version }}/lib64"
+          test -d "${LIBDIR}" || LIBDIR="$HOME/openssl-${{ matrix.openssl-version }}/lib"
           echo "Using OpenSSL lib dir: ${LIBDIR}"
           test -d "${LIBDIR}" || { echo "lib directory not found: ${LIBDIR}"; exit 1; }
           echo "${LIBDIR}" | sudo tee /etc/ld.so.conf.d/openssl-kaede.conf
