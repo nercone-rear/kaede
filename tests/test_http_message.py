@@ -8,7 +8,7 @@ difference nobody notices.
 
 import pytest
 
-from kaede.http.models import HTTPLimits, HTTPHeaders, HTTPResponse
+from kaede.http.models import HTTPBroadRole, HTTPLimits, HTTPHeaders, HTTPResponse
 from kaede.http.protocol.h2 import H2Session, H2Connection, H2StreamError
 from kaede.http.protocol.h3 import H3Session, H3Connection, H3Error
 
@@ -25,26 +25,26 @@ class Peer:
     def __repr__(self):
         return self.name
 
+def role(server):
+    return HTTPBroadRole.SERVER if server else HTTPBroadRole.CLIENT
+
 def h2(server=True):
     session = H2Session.__new__(H2Session)
     session.transport, session.limits, session.observer = object(), HTTPLimits(), None
     session.remote = type("Remote", (), {"initial_window_size": 65535})()
 
-    return H2Connection(session, 1, server=server)
+    return H2Connection(session, 1, role=role(server))
 
 def h3(server=True):
     session = H3Session.__new__(H3Session)
     session.connection, session.limits, session.observer = object(), HTTPLimits(), None
 
-    return H3Connection(session, None, server=server)
+    return H3Connection(session, None, role=role(server))
 
 PEERS = [Peer("HTTP/2", h2, H2StreamError), Peer("HTTP/3", h3, H3Error)]
 
 def split(connection, fields):
-    if isinstance(connection, H3Connection):
-        return connection.split(fields, trailer=False)
-
-    return connection.split(fields)
+    return connection.split(fields, trailer=False)
 
 def request(connection, fields):
     return connection.request_from(*split(connection, fields))
@@ -229,9 +229,10 @@ class TestContentLength:
         message = HTTPResponse(status_code=200, headers=HTTPHeaders([("content-length", declared)]))
 
         if isinstance(connection, H3Connection):
-            return lambda: connection.verify(message, b"x" * received)
+            message.body = b"x" * received
+        else:
+            connection.counted = received
 
-        connection.counted = received
         return lambda: connection.verify(message)
 
     def test_a_disagreeing_length_is_malformed(self, peer):
@@ -251,7 +252,8 @@ class TestContentLength:
         message = HTTPResponse(status_code=204, headers=HTTPHeaders([("content-length", "5")]))
 
         if isinstance(connection, H3Connection):
-            connection.verify(message, b"")
+            message.body = b""
         else:
             connection.counted = 0
-            connection.verify(message)
+
+        connection.verify(message)

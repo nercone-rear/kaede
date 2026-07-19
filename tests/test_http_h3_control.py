@@ -9,7 +9,7 @@ check both halves, the detection and the reporting.
 import pytest
 
 from kaede.quic.errors import QUICError, QUICClosedError
-from kaede.http.models import HTTPLimits
+from kaede.http.models import HTTPBroadRole, HTTPLimits
 from kaede.http.protocol.h3 import H3Session, H3Error, Varint, Stream, Kind, Setting, Code
 
 def frame(kind: int, payload: bytes = b"") -> bytes:
@@ -60,7 +60,7 @@ class Connection:
 
 def session(server=True) -> H3Session:
     built = H3Session.__new__(H3Session)
-    H3Session.__init__(built, Connection(), server=server, limits=HTTPLimits())
+    H3Session.__init__(built, Connection(), role=HTTPBroadRole.SERVER if server else HTTPBroadRole.CLIENT, limits=HTTPLimits())
 
     return built
 

@@ -10,7 +10,6 @@ from ..protocol import QUICConnection
 @dataclass
 class QUICClientConfig:
     connect_timeout: Optional[float] = 30.0
-    receive_timeout: Optional[float] = 30.0
 
     tls: Optional[TLSConfig] = None
 

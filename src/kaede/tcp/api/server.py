@@ -106,11 +106,16 @@ class TCPServer:
         self.connections = set()
         self.tasks = set()
 
+        self.sweeper: Optional[asyncio.Future] = None
         self.stopped: Optional[asyncio.Event] = None
 
     @property
     def ports(self) -> List[Tuple[str, TCPPort]]:
         return [TCPProtocol.address(sock.getsockname()) for server in self.servers for sock in (server.sockets or ())]
+
+    @property
+    def interval(self) -> float:
+        return max(1.0, self.gate.window)
 
     async def listen(self, handler: TCPHandler, ports: Optional[List[Tuple[str, TCPPort]]] = None, *, reuse_port: bool = False):
         ports = [("0.0.0.0", TCPPort(0))] if ports is None else ports
@@ -122,6 +127,8 @@ class TCPServer:
 
         for host, port in ports:
             self.servers.append(await loop.create_server(lambda: TCPServerProtocol(self, handler), host, int(port), reuse_port=reuse_port))
+
+        self.sweeper = asyncio.ensure_future(self.watch())
 
     async def serve(self, handler: TCPHandler, ports: Optional[List[Tuple[str, TCPPort]]] = None, *, reuse_port: bool = False):
         await self.listen(handler, ports, reuse_port=reuse_port)
@@ -166,7 +173,19 @@ class TCPServer:
             self.connections.discard(connection)
             self.gate.release()
 
+    async def watch(self):
+        while True:
+            await asyncio.sleep(self.interval)
+            self.expire()
+
+    def expire(self, now: Optional[float] = None):
+        self.gate.sweep(now)
+
     async def close(self, timeout: Optional[float] = None):
+        if self.sweeper is not None:
+            self.sweeper.cancel()
+            self.sweeper = None
+
         for server in self.servers:
             server.close()
 

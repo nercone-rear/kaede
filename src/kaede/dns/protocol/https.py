@@ -3,13 +3,14 @@ from typing import Optional, Callable, Tuple
 from ...tls import TLSConfig
 from ..models import DNSMessage
 from ..errors import DNSError, DNSFormatError, DNSConnectionError, DNSServerError, DNSTimeoutError
+from .handler import DNSTransport
 
-class DNSHTTPSTransport:
-    def __init__(self, host: str, port: int = 443, *, path: str = "/dns-query", tls: Optional[TLSConfig] = None, hostname: Optional[str] = None, connect_timeout: float = 5.0):
+class DNSHTTPSTransport(DNSTransport):
+    def __init__(self, dst: Tuple[str, int], *, path: str = "/dns-query", tls: Optional[TLSConfig] = None, hostname: Optional[str] = None, connect_timeout: float = 5.0):
         from ...http.api.client import HTTPClient, HTTPClientConfig
 
-        self.host = hostname or host
-        self.url = f"https://{self.host}{'' if port == 443 else f':{port}'}{path}"
+        self.host = hostname or dst[0]
+        self.url = f"https://{self.host}{'' if dst[1] == 443 else f':{dst[1]}'}{path}"
 
         self.client = HTTPClient(config=HTTPClientConfig(versions=["HTTP/2.0", "HTTP/1.1"], tls=tls or TLSConfig(), connect_timeout=connect_timeout))
 
@@ -40,6 +41,9 @@ class DNSHTTPSTransport:
 
         if answer.id != 0:
             raise DNSFormatError(f"{self.host} answered over DoH with the message ID {answer.id} rather than 0.")
+
+        if not message.matches(answer):
+            raise DNSFormatError(f"{self.host} answered over DoH with a message that does not match the query.")
 
         return answer
 

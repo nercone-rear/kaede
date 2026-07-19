@@ -443,7 +443,7 @@ class QUICConnection:
 
     @property
     def servername(self) -> Optional[str]:
-        value = self.library.get_servername(self.pointer, 0)
+        value = self.library.get_servername(self.pointer, Control.NAMETYPE_HOST)
         return value.decode() if value else None
 
     @property

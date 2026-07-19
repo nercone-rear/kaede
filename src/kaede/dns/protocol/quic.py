@@ -9,7 +9,7 @@ from ...quic import QUICClient, QUICClientConfig, QUICConnection, QUICStream
 from ...quic.errors import QUICError, QUICTimeoutError
 from ..models import DNSMessage
 from ..errors import DNSError, DNSFormatError, DNSConnectionError, DNSTimeoutError
-from .udp import DNSUDPTransport
+from .handler import DNSTransport
 
 class DNSStream:
     def __init__(self, connection: QUICConnection, stream: QUICStream):
@@ -33,7 +33,7 @@ class DNSStream:
     async def close(self):
         await self.stream.close()
 
-class DNSQUICTransport:
+class DNSQUICTransport(DNSTransport):
     def __init__(self, dst: Tuple[str, int], *, tls: Optional[TLSConfig] = None, hostname: Optional[str] = None, connect_timeout: float = 5.0):
         self.dst = dst
         self.connect_timeout = connect_timeout
@@ -104,7 +104,7 @@ class DNSQUICTransport:
         if response.id != 0:
             raise DNSFormatError(f"{self.dst[0]} answered over DoQ with the message ID {response.id} rather than 0.")
 
-        if not DNSUDPTransport.matches(message, response):
+        if not message.matches(response):
             raise DNSFormatError(f"{self.dst[0]} answered over DoQ with a message that does not match the query.")
 
         return response

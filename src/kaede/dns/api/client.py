@@ -7,6 +7,7 @@ from ...tls import TLSConfig
 from ...udp import UDPPort
 from ..models import DNSPort, DNSName, DNSRecordType, DNSRecordClass, DNSResponseCode, DNSQuestion, DNSRecords, EDNS, DNSMessage
 from ..errors import DNSError, DNSFormatError, DNSConnectionError, DNSServerError, DNSSECError
+from ..protocol.handler import DNSTransport
 from ..protocol.udp import DNSUDPTransport
 from ..protocol.tcp import DNSTCPTransport
 from ..protocol.tls import DNSTLSTransport
@@ -79,7 +80,7 @@ class DNSClient:
         self.config = config or DNSClientConfig()
 
         self.cache = DNSCache() if self.config.cache else None
-        self.transports: Dict[Tuple, DNSTCPTransport] = {}
+        self.transports: Dict[Tuple, DNSTransport] = {}
         self.validator: Optional[DNSSECValidator] = None
 
     async def __aenter__(self) -> "DNSClient":
@@ -117,7 +118,7 @@ class DNSClient:
 
     async def attempt(self, host: str, port: DNSPort, message: DNSMessage) -> DNSMessage:
         if port.type == "udp" and not port.secure:
-            response = await DNSUDPTransport((host, int(port.value))).query(message, timeout=self.config.timeout, retries=self.config.retries)
+            response = await DNSUDPTransport((host, int(port.value)), retries=self.config.retries).query(message, timeout=self.config.timeout)
 
             if not response.truncated:
                 return response
@@ -135,7 +136,7 @@ class DNSClient:
 
         raise DNSConnectionError(f"The {port.type}{'+tls' if port.secure else ''} transport is not supported.")
 
-    def keep(self, host: str, port: DNSPort) -> DNSTCPTransport:
+    def keep(self, host: str, port: DNSPort) -> DNSTransport:
         key = (host, port.type, str(port.value), port.secure)
         transport = self.transports.get(key)
 
@@ -144,11 +145,11 @@ class DNSClient:
 
         return transport
 
-    def build(self, host: str, port: DNSPort):
+    def build(self, host: str, port: DNSPort) -> DNSTransport:
         if port.type == "https":
             from ..protocol.https import DNSHTTPSTransport
 
-            return DNSHTTPSTransport(host, int(port.value), path=self.config.doh_path, tls=self.config.tls, hostname=self.config.hostname, connect_timeout=self.config.timeout)
+            return DNSHTTPSTransport((host, int(port.value)), path=self.config.doh_path, tls=self.config.tls, hostname=self.config.hostname, connect_timeout=self.config.timeout)
 
         if port.type == "quic":
             return DNSQUICTransport((host, int(port.value)), tls=self.config.tls, hostname=self.config.hostname, connect_timeout=self.config.timeout)

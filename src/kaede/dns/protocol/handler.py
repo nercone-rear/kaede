@@ -7,6 +7,13 @@ from ...quic.errors import QUICError, QUICClosedError, QUICLostError, QUICStream
 from ..models import DNSMessage
 from ..errors import DNSError, DNSFormatError, DNSClosedError, DNSTimeoutError
 
+class DNSTransport:
+    async def query(self, message: DNSMessage, *, timeout: float = 3.0) -> DNSMessage:
+        raise NotImplementedError()
+
+    async def close(self):
+        raise NotImplementedError()
+
 class DNSConnection:
     fallback_limit = 512 # in bytes, what a peer without EDNS accepts over UDP
 

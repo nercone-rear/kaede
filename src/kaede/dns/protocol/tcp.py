@@ -7,10 +7,9 @@ from ...tcp.errors import TCPError
 from ...tls.errors import TLSError
 from ..models import DNSMessage
 from ..errors import DNSError, DNSFormatError, DNSConnectionError, DNSClosedError
-from .handler import DNSConnection
-from .udp import DNSUDPTransport
+from .handler import DNSConnection, DNSTransport
 
-class DNSTCPTransport:
+class DNSTCPTransport(DNSTransport):
     def __init__(self, dst: Tuple[str, int], *, connect_timeout: float = 5.0):
         self.dst = dst
         self.connect_timeout = connect_timeout
@@ -57,14 +56,11 @@ class DNSTCPTransport:
                     await self.drop()
                     raise
 
-                if not self.matches(message, response):
+                if not message.matches(response):
                     await self.drop()
                     raise DNSFormatError(f"{self.dst[0]} answered with a message that does not match the query.")
 
                 return response
-
-    def matches(self, query: DNSMessage, response: DNSMessage) -> bool:
-        return DNSUDPTransport.matches(query, response)
 
     async def drop(self):
         connection, self.connection = self.connection, None

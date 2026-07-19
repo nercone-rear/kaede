@@ -1,5 +1,7 @@
 import base64
+import calendar
 import ipaddress
+import time
 from typing import Optional, Union, List, Dict, Tuple
 from dataclasses import dataclass
 
@@ -9,14 +11,36 @@ from .models import DNSName, DNSRecordType, DNSRecordData
 @dataclass(frozen=True)
 class RawRecordData(DNSRecordData):
     raw: bytes
-    rtype_unknown: int
+    code: int = 0
 
     def pack(self) -> bytes:
         return self.raw
 
     @classmethod
-    def unpack(cls, raw, message, offset, rtype_unknown=0):
-        return cls(raw=raw, rtype_unknown=rtype_unknown)
+    def unpack(cls, raw, message, offset):
+        return cls(raw=raw)
+
+    @classmethod
+    def from_text(cls, tokens):
+        # RFC 3597 section 5: \# <length> <hexdata>.
+        if len(tokens) < 2 or tokens[0] != "\\#":
+            raise DNSFormatError("The generic record data must begin with the \\# token and a length.")
+
+        length = int(tokens[1])
+        raw = bytes.fromhex("".join(tokens[2:]))
+
+        if len(raw) != length:
+            raise DNSFormatError(f"The generic record data declares {length} bytes but carries {len(raw)}.")
+
+        return cls(raw=raw)
+
+    @property
+    def text(self) -> str:
+        # RFC 3597 section 5: \# <length> <hexdata>.
+        if not self.raw:
+            return "\\# 0"
+
+        return f"\\# {len(self.raw)} {self.raw.hex().upper()}"
 
 @dataclass(frozen=True)
 class ARecordData(DNSRecordData):
@@ -358,6 +382,38 @@ class RRSIGRecordData(DNSRecordData):
             signature=bytes(message[following:offset + len(raw)])
         )
 
+    @staticmethod
+    def moment(text: str) -> int:
+        # RFC 4034 section 3.2: a time is either 14 digits of YYYYMMDDHHMMSS or a 32-bit second count.
+        if len(text) == 14 and text.isdigit():
+            return calendar.timegm(time.strptime(text, "%Y%m%d%H%M%S"))
+
+        return int(text)
+
+    @staticmethod
+    def stamp(value: int) -> str:
+        return time.strftime("%Y%m%d%H%M%S", time.gmtime(value))
+
+    @classmethod
+    def from_text(cls, tokens):
+        return cls(
+            type_covered=DNSRecordType.from_name(tokens[0]),
+            algorithm=int(tokens[1]),
+            labels=int(tokens[2]),
+            original_ttl=int(tokens[3]),
+            expiration=cls.moment(tokens[4]),
+            inception=cls.moment(tokens[5]),
+            key_tag=int(tokens[6]),
+            signer=tokens[7],
+            signature=base64.b64decode("".join(tokens[8:]))
+        )
+
+    @property
+    def text(self) -> str:
+        return f"{DNSRecordType.mnemonic(self.type_covered)} {self.algorithm} {self.labels} {self.original_ttl} " \
+               f"{RRSIGRecordData.stamp(self.expiration)} {RRSIGRecordData.stamp(self.inception)} {self.key_tag} " \
+               f"{self.signer} {base64.b64encode(self.signature).decode()}"
+
 class Bitmap:
     @staticmethod
     def pack(types: Tuple[Union[DNSRecordType, int], ...]) -> bytes:
@@ -417,6 +473,14 @@ class NSECRecordData(DNSRecordData):
 
         return cls(next_domain=name, types=Bitmap.unpack(message[following:offset + len(raw)]))
 
+    @classmethod
+    def from_text(cls, tokens):
+        return cls(next_domain=tokens[0], types=tuple(DNSRecordType.from_name(token) for token in tokens[1:]))
+
+    @property
+    def text(self) -> str:
+        return " ".join([self.next_domain] + [DNSRecordType.mnemonic(rtype) for rtype in self.types])
+
 @dataclass(frozen=True)
 class NSEC3RecordData(DNSRecordData):
     algorithm: int
@@ -454,6 +518,29 @@ class NSEC3RecordData(DNSRecordData):
             types=Bitmap.unpack(raw[cut + 1 + raw[cut]:])
         )
 
+    @classmethod
+    def from_text(cls, tokens):
+        # RFC 5155 section 3.3: the next hashed owner is unpadded Base32hex.
+        hashed = tokens[4] + "=" * (-len(tokens[4]) % 8)
+
+        return cls(
+            algorithm=int(tokens[0]),
+            flags=int(tokens[1]),
+            iterations=int(tokens[2]),
+            salt=b"" if tokens[3] == "-" else bytes.fromhex(tokens[3]),
+            next_hashed=base64.b32hexdecode(hashed, casefold=True),
+            types=tuple(DNSRecordType.from_name(token) for token in tokens[5:])
+        )
+
+    @property
+    def text(self) -> str:
+        # RFC 5155 section 3.3: an empty salt is a "-"; the next hashed owner is unpadded Base32hex.
+        salt = self.salt.hex().upper() if self.salt else "-"
+        hashed = base64.b32hexencode(self.next_hashed).decode().rstrip("=")
+        parts = [str(self.algorithm), str(self.flags), str(self.iterations), salt, hashed]
+
+        return " ".join(parts + [DNSRecordType.mnemonic(rtype) for rtype in self.types])
+
 @dataclass(frozen=True)
 class NSEC3PARAMRecordData(DNSRecordData):
     algorithm: int
@@ -470,6 +557,21 @@ class NSEC3PARAMRecordData(DNSRecordData):
             raise DNSFormatError("The NSEC3PARAM record ends in the middle of its salt.")
 
         return cls(algorithm=raw[0], flags=raw[1], iterations=int.from_bytes(raw[2:4], "big"), salt=bytes(raw[5:5 + raw[4]]))
+
+    @classmethod
+    def from_text(cls, tokens):
+        # RFC 5155 section 4.3: an empty salt is a "-".
+        return cls(
+            algorithm=int(tokens[0]),
+            flags=int(tokens[1]),
+            iterations=int(tokens[2]),
+            salt=b"" if tokens[3] == "-" else bytes.fromhex(tokens[3])
+        )
+
+    @property
+    def text(self) -> str:
+        # RFC 5155 section 4.3: an empty salt is a "-".
+        return f"{self.algorithm} {self.flags} {self.iterations} {self.salt.hex().upper() if self.salt else '-'}"
 
 @dataclass(frozen=True)
 class TLSARecordData(DNSRecordData):
@@ -512,6 +614,8 @@ class SVCBRecordData(DNSRecordData):
     IPV4HINT        = 4
     ECH             = 5
     IPV6HINT        = 6
+
+    KEYS = {"mandatory": 0, "alpn": 1, "no-default-alpn": 2, "port": 3, "ipv4hint": 4, "ech": 5, "ipv6hint": 6}
 
     def value(self, key: int) -> Optional[bytes]:
         for code, raw in self.params:
@@ -612,31 +716,100 @@ class SVCBRecordData(DNSRecordData):
 
         return cls(priority=int.from_bytes(raw[0:2], "big"), target=target, params=tuple(params))
 
+    @staticmethod
+    def code_of(key: str) -> int:
+        # RFC 9460 section 2.1: a SvcParamKey is a registered name or the generic keyNNNNN form.
+        if key in SVCBRecordData.KEYS:
+            return SVCBRecordData.KEYS[key]
+
+        if key.startswith("key") and key[3:].isdigit():
+            return int(key[3:])
+
+        raise DNSFormatError(f"{key!r} is not a known SvcParamKey.")
+
+    @staticmethod
+    def mnemonic(code: int) -> str:
+        # RFC 9460 section 2.1: an unregistered key renders as keyNNNNN.
+        for key, value in SVCBRecordData.KEYS.items():
+            if value == code:
+                return key
+
+        return f"key{code}"
+
+    def render(self, code: int, raw: bytes) -> str:
+        if code == SVCBRecordData.MANDATORY:
+            keys = [int.from_bytes(raw[at:at + 2], "big") for at in range(0, len(raw), 2)]
+            return "mandatory=" + ",".join(SVCBRecordData.mnemonic(key) for key in keys)
+
+        if code == SVCBRecordData.ALPN:
+            return "alpn=" + ",".join(self.alpn)
+
+        if code == SVCBRecordData.NO_DEFAULT_ALPN:
+            return "no-default-alpn"
+
+        if code == SVCBRecordData.PORT:
+            return f"port={self.port}"
+
+        if code == SVCBRecordData.IPV4HINT:
+            return "ipv4hint=" + ",".join(str(address) for address in self.ipv4hints)
+
+        if code == SVCBRecordData.IPV6HINT:
+            return "ipv6hint=" + ",".join(str(address) for address in self.ipv6hints)
+
+        if code == SVCBRecordData.ECH:
+            return "ech=" + base64.b64encode(self.ech).decode()
+
+        return f"key{code}=" + base64.b64encode(raw).decode()
+
+    @staticmethod
+    def encode(key: str, value: str) -> bytes:
+        code = SVCBRecordData.code_of(key)
+
+        if code == SVCBRecordData.MANDATORY:
+            return b"".join(SVCBRecordData.code_of(name).to_bytes(2, "big") for name in value.split(","))
+
+        if code == SVCBRecordData.ALPN:
+            wire = bytearray()
+
+            for name in value.split(","):
+                octets = name.encode()
+                wire.append(len(octets))
+                wire += octets
+
+            return bytes(wire)
+
+        if code == SVCBRecordData.NO_DEFAULT_ALPN:
+            return b""
+
+        if code == SVCBRecordData.PORT:
+            return int(value).to_bytes(2, "big")
+
+        if code == SVCBRecordData.IPV4HINT:
+            return b"".join(ipaddress.IPv4Address(item).packed for item in value.split(","))
+
+        if code == SVCBRecordData.IPV6HINT:
+            return b"".join(ipaddress.IPv6Address(item).packed for item in value.split(","))
+
+        if code == SVCBRecordData.ECH:
+            return base64.b64decode(value)
+
+        return base64.b64decode(value)
+
+    @classmethod
+    def from_text(cls, tokens):
+        params: List[Tuple[int, bytes]] = []
+
+        for token in tokens[2:]:
+            key, _, value = token.partition("=")
+            params.append((SVCBRecordData.code_of(key), cls.encode(key, value)))
+
+        return cls(priority=int(tokens[0]), target=tokens[1], params=tuple(params))
+
+    @property
+    def text(self) -> str:
+        parts = [str(self.priority), self.target or "."]
+
+        return " ".join(parts + [self.render(code, raw) for code, raw in self.params])
+
 class HTTPSRecordData(SVCBRecordData):
     ...
-
-RECORD_MAP: Dict[DNSRecordType, type] = {
-    DNSRecordType.A:          ARecordData,
-    DNSRecordType.AAAA:       AAAARecordData,
-    DNSRecordType.NS:         NSRecordData,
-    DNSRecordType.CNAME:      CNAMERecordData,
-    DNSRecordType.PTR:        PTRRecordData,
-    DNSRecordType.DNAME:      DNAMERecordData,
-    DNSRecordType.SOA:        SOARecordData,
-    DNSRecordType.MX:         MXRecordData,
-    DNSRecordType.TXT:        TXTRecordData,
-    DNSRecordType.SRV:        SRVRecordData,
-    DNSRecordType.CAA:        CAARecordData,
-    DNSRecordType.DS:         DSRecordData,
-    DNSRecordType.CDS:        CDSRecordData,
-    DNSRecordType.DNSKEY:     DNSKEYRecordData,
-    DNSRecordType.CDNSKEY:    CDNSKEYRecordData,
-    DNSRecordType.RRSIG:      RRSIGRecordData,
-    DNSRecordType.NSEC:       NSECRecordData,
-    DNSRecordType.NSEC3:      NSEC3RecordData,
-    DNSRecordType.NSEC3PARAM: NSEC3PARAMRecordData,
-    DNSRecordType.TLSA:       TLSARecordData,
-    DNSRecordType.SMIMEA:     SMIMEARecordData,
-    DNSRecordType.SVCB:       SVCBRecordData,
-    DNSRecordType.HTTPS:      HTTPSRecordData,
-}

@@ -10,7 +10,6 @@ from ..tls import DTLSConnection
 @dataclass
 class UDPClientConfig:
     connect_timeout: Optional[float] = 30.0
-    receive_timeout: Optional[float] = 30.0
 
     tls: Optional[TLSConfig] = None
     alpn: Optional[List[str]] = None

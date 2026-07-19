@@ -1,6 +1,6 @@
 import ssl
 from enum import Enum
-from typing import Optional, Union, List, Dict
+from typing import Optional, Union, List
 from dataclasses import dataclass, field
 
 class TLSVersion(Enum):
@@ -11,7 +11,7 @@ class TLSVersion(Enum):
 
     @staticmethod
     def from_float(value: float) -> "TLSVersion":
-        return VERSION_MAP[value]
+        return {float(version.value.split("v")[1]): version for version in TLSVersion}[value]
 
 class TLSState(Enum):
     HANDSHAKE_STARTED = "Handshake Started"
@@ -63,7 +63,7 @@ class TLSGroup(Enum):
 
     @staticmethod
     def from_name(value: str) -> "TLSGroup":
-        return GROUP_MAP[value.upper()]
+        return {group.value.upper(): group for group in TLSGroup}[value.upper()]
 
 class TLSCipher(Enum):
     # RSA (static)
@@ -218,11 +218,7 @@ class TLSCipher(Enum):
 
     @staticmethod
     def from_name(value: str) -> "TLSCipher":
-        return CIPHER_MAP[value.upper()]
-
-VERSION_MAP: Dict[float, TLSVersion] = {float(v.value.split("v")[1]): v for v in TLSVersion}
-GROUP_MAP:   Dict[str, TLSGroup]     = {g.value.upper(): g for g in TLSGroup}
-CIPHER_MAP:  Dict[str, TLSCipher]    = {c.value.upper(): c for c in TLSCipher}
+        return {cipher.value.upper(): cipher for cipher in TLSCipher}[value.upper()]
 
 @dataclass
 class TLSConfig:
