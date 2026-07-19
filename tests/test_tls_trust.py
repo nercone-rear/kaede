@@ -1,3 +1,4 @@
+import sys
 import ssl
 from ssl import CERT_NONE
 
@@ -10,6 +11,10 @@ from kaede.tcp import TCPPort, TCPClient, TCPServer, TCPServerConfig, TCPHandler
 from kaede.tcp.api.client import TCPClientConfig
 
 LOCAL = "127.0.0.1"
+
+requires_partial_chain = pytest.mark.skipif(
+    sys.version_info < (3, 10), reason="ssl.VERIFY_X509_PARTIAL_CHAIN was added in Python 3.10"
+)
 
 class Running:
     """A TLS enabled TCPServer on an ephemeral port."""
@@ -72,6 +77,7 @@ class TestCAData:
         async with Running(upper, server_certificate) as server:
             await exchange(server, TLSConfig(cadata=der))
 
+    @requires_partial_chain
     async def test_cadata_alone_defines_the_trust_scope(self, server_certificate, authority):
         # With cadata set, the system trust store must not be consulted, so a
         # trust anchor unrelated to the test CA has to make verification fail.
@@ -95,6 +101,7 @@ class TestCAData:
             TLSContext(TLSConfig(cadata=""))
 
 class TestVerifyFlags:
+    @requires_partial_chain
     async def test_partial_chain_trusts_a_leaf(self, server_certificate, authority):
         # X509_V_FLAG_PARTIAL_CHAIN lets a non self-signed certificate act as a
         # trust anchor, so trusting the leaf itself has to be enough.
