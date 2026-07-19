@@ -243,3 +243,4 @@ Please note that this method consumes a large amount of the context window and s
 
 By the way, since the sandbox performance is not very high, building OpenSSL from source is not recommended.
 You should either use the methods mentioned above or download a pre-built version, e.g. from https://github.com/nercone-rear/openssl/releases, the same source used by CI.
+Please note that you need to run `add_repo` to fetch from external repositories such as `nercone-rear/openssl`.
