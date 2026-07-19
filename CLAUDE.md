@@ -226,3 +226,19 @@ When approved by human review and a human requests the creation of a commit, you
     - Use text like "claude-sonnet-4.6" for MODEL_VERSION.
     - For [TOOL 0] [TOOL 1], list the names of the tools used to analyze the code, separated by spaces.
         - You do not need to list basic daily system tools like file editing, web search/browsing, git, uv, or clang.
+
+## Troubleshooting / Useful Information
+
+### If the appropriate version of OpenSSL is not installed in the sandbox
+
+The 3.6/4.0 versions required by Kaede are the latest releases of the 3.x/4.x series. You can read the manuals in the /doc/man3 directory of the OpenSSL repository (openssl/openssl), or on manpages.debian.org under the testing/unstable (3.6+) and experimental (4.0+) versions.
+If the appropriate version of OpenSSL is not available in your sandbox environment, you can obtain the manuals from these sources and verify them manually.
+
+Additionally, when you submit a pull request, automated tests via pytest using the latest OpenSSL will be executed on GitHub Actions.
+While these are only supplementary as they are automated tests, they will be useful for minimal functional testing using the latest OpenSSL.
+
+If you wish to verify functionality before submitting a pull request, you can also read the OpenSSL source code directly (this applies to open source software in general, not just OpenSSL).
+Please note that this method consumes a large amount of the context window and should not be used excessively, but it is one approach to keep in mind.
+
+By the way, since the sandbox performance is not very high, building OpenSSL from source is not recommended.
+You should either use the methods mentioned above or download a pre-built version.
