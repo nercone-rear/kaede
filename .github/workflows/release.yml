@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  fetch-openssl-3:
+  fetch-openssl-3-linux:
     runs-on: ubuntu-latest
     if: "!github.event.release.prerelease"
 
@@ -49,7 +49,7 @@ jobs:
           mkdir -p "$HOME/openssl-3"
           tar -xzf "${ASSET}" -C "$HOME/openssl-3" --strip-components=1
 
-  fetch-openssl-4:
+  fetch-openssl-4-linux:
     runs-on: ubuntu-latest
     if: "!github.event.release.prerelease"
 
@@ -91,7 +91,7 @@ jobs:
           tar -xzf "${ASSET}" -C "$HOME/openssl-4" --strip-components=1
 
   test-linux:
-    needs: [fetch-openssl-3, fetch-openssl-4]
+    needs: [fetch-openssl-3-linux, fetch-openssl-4-linux]
     runs-on: ubuntu-latest
     if: "!github.event.release.prerelease"
     strategy:
@@ -107,7 +107,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/openssl-3
-          key: ${{ needs.fetch-openssl-3.outputs.cache-key }}
+          key: ${{ needs.fetch-openssl-3-linux.outputs.cache-key }}
           fail-on-cache-miss: true
 
       - name: Restore OpenSSL 4 cache
@@ -115,7 +115,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/openssl-4
-          key: ${{ needs.fetch-openssl-4.outputs.cache-key }}
+          key: ${{ needs.fetch-openssl-4-linux.outputs.cache-key }}
           fail-on-cache-miss: true
 
       - name: Register OpenSSL and Set KAEDE_OPENSSL
