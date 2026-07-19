@@ -1,5 +1,6 @@
 import os
 import struct
+import asyncio
 import hashlib
 from base64 import b64encode
 from typing import Optional, Union, Tuple
@@ -18,6 +19,38 @@ class Opcode:
     CLOSE        = 0x8
     PING         = 0x9
     PONG         = 0xA
+
+class Close:
+    NORMAL   = 1000
+    PROTOCOL = 1002
+    INVALID  = 1007
+    ABSENT   = 1005
+    ABNORMAL = 1006
+    TLS      = 1015
+
+    UNSPEAKABLE = frozenset({1004, ABSENT, ABNORMAL, TLS})
+
+    @staticmethod
+    def sendable(code: int) -> bool:
+        return code not in Close.UNSPEAKABLE and (1000 <= code <= 1011 or 3000 <= code <= 4999)
+
+    @staticmethod
+    def receivable(code: int) -> bool:
+        return code not in Close.UNSPEAKABLE and (1000 <= code <= 1014 or 3000 <= code <= 4999)
+
+    @staticmethod
+    def clip(reason: str, room: int = 123) -> bytes:
+        raw = reason.encode()[:room]
+
+        while raw:
+            try:
+                raw.decode()
+                break
+
+            except UnicodeDecodeError:
+                raw = raw[:-1]
+
+        return raw
 
 class WSFrame:
     @staticmethod
@@ -59,8 +92,18 @@ class WSFrame:
 
         if length == 126:
             length = struct.unpack(">H", await transport.receive_exactly(2))[0]
+
+            if length < 126:
+                raise WebSocketError(Close.PROTOCOL, "A payload length is not minimally encoded.")
+
         elif length == 127:
             length = struct.unpack(">Q", await transport.receive_exactly(8))[0]
+
+            if length < 65536:
+                raise WebSocketError(Close.PROTOCOL, "A payload length is not minimally encoded.")
+
+            if length > 0x7FFFFFFFFFFFFFFF:
+                raise WebSocketError(Close.PROTOCOL, "A payload length has its most significant bit set.")
 
         if opcode >= 0x8:
             if length > 125:
@@ -92,8 +135,14 @@ class WSConnection:
 
         self.closed = False
         self.close_sent = False
+        self.close_received = False
 
     CLOSED = (TCPClosedError, TCPLostError, UDSClosedError, UDSLostError)
+
+    async def violate(self, code: int, message: str):
+        await self.close(code, message, linger=False)
+
+        raise WebSocketError(code, message)
 
     async def read(self, size: int = -1) -> Optional[Union[str, bytes]]:
         fragments = bytearray()
@@ -112,12 +161,10 @@ class WSConnection:
                 return None
 
             if self.server and not masked:
-                await self.close(1002, "A client frame was not masked.")
-                raise WebSocketError(1002, "A client frame was not masked.")
+                await self.violate(Close.PROTOCOL, "A client frame was not masked.")
 
             if not self.server and masked:
-                await self.close(1002, "A server frame was masked.")
-                raise WebSocketError(1002, "A server frame was masked.")
+                await self.violate(Close.PROTOCOL, "A server frame was masked.")
 
             if opcode == Opcode.PING:
                 await self.emit(Opcode.PONG, payload)
@@ -132,21 +179,21 @@ class WSConnection:
 
             if opcode in (Opcode.TEXT, Opcode.BINARY):
                 if first is not None:
-                    raise WebSocketError(1002, "A new data frame arrived mid-message.")
+                    await self.violate(Close.PROTOCOL, "A new data frame arrived mid-message.")
 
                 first = opcode
 
             elif opcode == Opcode.CONTINUATION:
                 if first is None:
-                    raise WebSocketError(1002, "A continuation frame arrived with nothing to continue.")
+                    await self.violate(Close.PROTOCOL, "A continuation frame arrived with nothing to continue.")
 
             else:
-                raise WebSocketError(1002, f"The opcode {opcode:#x} is not defined.")
+                await self.violate(Close.PROTOCOL, f"The opcode {opcode:#x} is not defined.")
 
             fragments += payload
 
             if len(fragments) > self.limit:
-                raise WebSocketError(1009, "The reassembled message is over the limit.")
+                await self.violate(1009, "The reassembled message is over the limit.")
 
             if fin:
                 if first == Opcode.TEXT:
@@ -154,8 +201,7 @@ class WSConnection:
                         return fragments.decode()
 
                     except UnicodeDecodeError:
-                        await self.close(1007, "The text message is not valid UTF-8.")
-                        raise WebSocketError(1007, "The text message is not valid UTF-8.")
+                        await self.violate(Close.INVALID, "The text message is not valid UTF-8.")
 
                 return bytes(fragments)
 
@@ -183,27 +229,51 @@ class WSConnection:
             raise WebSocketError(1006, f"The WebSocket transport failed: {e}")
 
     async def acknowledge(self, payload: bytes):
-        code = struct.unpack(">H", payload[:2])[0] if len(payload) >= 2 else 1005
+        self.close_received = True
+        code = Close.NORMAL
+
+        if len(payload) == 1:
+            await self.violate(Close.PROTOCOL, "A close frame carries a one octet body.")
+
+        if len(payload) >= 2:
+            received = struct.unpack(">H", payload[:2])[0]
+
+            try:
+                payload[2:].decode()
+
+            except UnicodeDecodeError:
+                await self.violate(Close.INVALID, "The close reason is not valid UTF-8.")
+
+            if not Close.receivable(received):
+                await self.violate(Close.PROTOCOL, f"The close code {received} may not appear on the wire.")
+
+            code = received
 
         if not self.close_sent:
-            await self.close(1000 if code == 1005 else code)
+            await self.close(code)
 
         self.closed = True
 
-    async def close(self, code: int = 1000, reason: str = ""):
+    async def close(self, code: int = Close.NORMAL, reason: str = "", *, linger: bool = True):
         if self.close_sent or self.closed:
             self.closed = True
             return
 
         self.close_sent = True
 
-        payload = struct.pack(">H", code) + reason.encode()[:123] if code else b""
+        if code and not Close.sendable(code):
+            code = Close.NORMAL
+
+        payload = struct.pack(">H", code) + Close.clip(reason) if code else b""
 
         try:
             await self.transport.send(WSFrame.build(Opcode.CLOSE, payload, mask=not self.server))
 
         except (TCPError, UDSError, TLSError):
             pass
+
+        if linger and not self.close_received:
+            await self.linger()
 
         try:
             await self.transport.close()
@@ -212,3 +282,18 @@ class WSConnection:
             pass
 
         self.closed = True
+
+    async def linger(self, timeout: float = 5.0):
+        try:
+            await asyncio.wait_for(self.settle(), timeout)
+
+        except (asyncio.TimeoutError, WebSocketError, TCPError, UDSError, TLSError):
+            pass
+
+    async def settle(self):
+        while True:
+            _, opcode, _, _ = await WSFrame.read(self.transport, limit=self.limit)
+
+            if opcode == Opcode.CLOSE:
+                self.close_received = True
+                return

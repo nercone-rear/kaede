@@ -2,6 +2,8 @@ import urllib.parse
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass
 
+from .constants import Characters
+
 @dataclass
 class URL:
     scheme: str
@@ -12,6 +14,9 @@ class URL:
     fragment: str
 
     DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443, "dns": 53, "ftp": 21}
+
+    LITERAL    = frozenset("0123456789abcdefABCDEF:.")
+    REGISTERED = frozenset("-._~%!$&'()*+,;=") | Characters.DIGIT | Characters.LOWER | Characters.UPPER
 
     def __str__(self) -> str:
         location = self.netloc
@@ -47,6 +52,23 @@ class URL:
             location += f":{self.port}"
 
         return location
+
+    @staticmethod
+    def authority(value: str) -> bool:
+        if value.startswith("["):
+            host, bracket, rest = value[1:].partition("]")
+
+            if not bracket or not host or not URL.LITERAL.issuperset(host):
+                return False
+
+            return not rest or (rest.startswith(":") and Characters.DIGIT.issuperset(rest[1:]))
+
+        host, colon, port = value.partition(":")
+
+        if not URL.REGISTERED.issuperset(host):
+            return False
+
+        return not colon or Characters.DIGIT.issuperset(port)
 
     @classmethod
     def parse(cls, value: str) -> "URL":

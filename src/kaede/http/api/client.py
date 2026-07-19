@@ -1,8 +1,9 @@
 import asyncio
 from typing import Optional, List, Dict, Tuple, Union
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ...url import URL
+from ...constants import Digits
 from ...tls import TLSConfig
 from ...tls.openssl import TLSContext
 from ...tls.errors import TLSError
@@ -11,11 +12,12 @@ from ...tcp.errors import TCPError
 from ...udp import UDPPort
 from ...quic import QUICClient, QUICClientConfig
 from ...quic.errors import QUICError
-from ..models import HTTPVersion, HTTPMethod, HTTPBroadRole, HTTPRole, HTTPPort, HTTPHeaders, HTTPRequest, HTTPLimits
+from ..models import HTTPVersion, HTTPMethod, HTTPBroadRole, HTTPRole, HTTPPort, HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse, HTTPLimits
 from ..errors import HTTPError
+from ..headers import CommaHeader
 from ..protocol import HTTPConnection, H1Connection
 from ..protocol.h2 import H2Session
-from ..protocol.h3 import H3Session
+from ..protocol.h3 import H3Session, Code as H3Code
 from ..finalizer import finalize_request
 from ..helpers.hsts import HSTSStore
 from ..websocket import WSConnection
@@ -71,9 +73,24 @@ class HTTPClient:
 
         return offer
 
+    def upgrade(self, url: URL) -> URL:
+        if self.store is None or url.scheme not in ("http", "ws") or not self.store.secure(url.host):
+            return url
+
+        return replace(url, scheme={"http": "https", "ws": "wss"}[url.scheme], port=443 if url.port == 80 else url.port)
+
+    def notice(self, host: str, secure: bool, message: HTTPMessage):
+        if self.store is None or not isinstance(message, HTTPResponse) or message.headers is None:
+            return
+
+        header = message.headers.get("Strict-Transport-Security")
+
+        if header is not None:
+            self.store.learn(host, header, secure=secure)
+
     async def request(self, method: HTTPMethod, url: Union[URL, str], *, headers=None, cookies: Optional[Dict[str, str]] = None, body: Optional[Union[bytes, str]] = None, timeout: Optional[float] = None) -> HTTPConnection:
-        url = URL.parse(url) if isinstance(url, str) else url
-        secure = url.scheme in ("https", "wss") or (self.store is not None and url.scheme in ("http", "ws") and self.store.secure(url.host))
+        url = self.upgrade(URL.parse(url) if isinstance(url, str) else url)
+        secure = url.scheme in ("https", "wss")
 
         host = url.host
         port = url.port or HTTPClient.DEFAULT_PORTS.get(url.scheme, 443 if secure else 80)
@@ -126,7 +143,7 @@ class HTTPClient:
             self.hold(host, port, secure, transport)
             return None
 
-        session = H2Session(transport, server=False, limits=self.config.limits)
+        session = H2Session(transport, server=False, limits=self.config.limits, observer=lambda message: self.notice(host, secure, message))
         await session.start()
         pump = asyncio.ensure_future(session.pump())
 
@@ -157,7 +174,7 @@ class HTTPClient:
             await client.close()
             raise HTTPError(502, f"Could not reach {host}:{port} over HTTP/3: {e}")
 
-        session = H3Session(connection, server=False, limits=self.config.limits)
+        session = H3Session(connection, server=False, limits=self.config.limits, observer=lambda message: self.notice(host, True, message))
         await session.start()
         reader = asyncio.ensure_future(self.overhear(session))
 
@@ -168,6 +185,11 @@ class HTTPClient:
         try:
             while True:
                 stream = await session.connection.accept()
+
+                if stream.readable and stream.writable:
+                    await session.fail(H3Code.STREAM_CREATION_ERROR, "The server opened a bidirectional stream.")
+                    return
+
                 asyncio.ensure_future(session.consume(stream))
 
         except QUICError:
@@ -217,7 +239,7 @@ class HTTPClient:
         src = ("", HTTPPort("tcp", TCPPort(0), secure))
         dst = (host, HTTPPort("tcp", TCPPort(port), secure))
 
-        connection = H1Connection(src, dst, transport=transport, role=HTTPBroadRole.CLIENT, version=version, limits=self.config.limits)
+        connection = H1Connection(src, dst, transport=transport, role=HTTPBroadRole.CLIENT, version=version, limits=self.config.limits, observer=lambda message: self.notice(host, secure, message))
         self.connections.append(connection)
 
         return connection
@@ -247,7 +269,7 @@ class HTTPClient:
         import os
         from base64 import b64encode
 
-        url = URL.parse(url) if isinstance(url, str) else url
+        url = self.upgrade(URL.parse(url) if isinstance(url, str) else url)
         secure = url.scheme in ("wss", "https")
         host = url.host
         port = url.port or (443 if secure else 80)
@@ -279,16 +301,43 @@ class HTTPClient:
 
         from ..websocket import WSFrame
 
-        if status != 101 or response.get("sec-websocket-accept") != WSFrame.accept(key):
+        try:
+            self.validate(status, response, key, subprotocols)
+
+        except HTTPError:
             await transport.close()
-            raise HTTPError(502, f"The server did not complete the WebSocket handshake (status {status}).")
+            raise
 
         return WSConnection(("", None), (host, None), transport=transport, server=False, subprotocol=response.get("sec-websocket-protocol"))
+
+    def validate(self, status: int, response: HTTPHeaders, key: str, subprotocols) -> None:
+        from ..websocket import WSFrame
+
+        if status != 101:
+            raise HTTPError(502, f"The server did not switch protocols (status {status}).")
+
+        if response.get("upgrade", "").strip().lower() != "websocket":
+            raise HTTPError(502, "The server handshake carries no Upgrade: websocket.")
+
+        if not any(token.lower() == "upgrade" for token in CommaHeader(response.get("connection", "")).raw):
+            raise HTTPError(502, "The server handshake carries no Connection: Upgrade.")
+
+        if response.get("sec-websocket-accept") != WSFrame.accept(key):
+            raise HTTPError(502, "The server handshake carries a wrong Sec-WebSocket-Accept.")
+
+        if any(CommaHeader(value).raw for value in response.values("sec-websocket-extensions")):
+            raise HTTPError(502, "The server selected a WebSocket extension that was never offered.")
+
+        chosen = response.values("sec-websocket-protocol")
+        offered = {name.strip().lower() for name in (subprotocols or [])}
+
+        if len(chosen) > 1 or (chosen and chosen[0].strip().lower() not in offered):
+            raise HTTPError(502, "The server selected a WebSocket subprotocol that was never offered.")
 
     async def handshake(self, transport) -> Tuple[int, HTTPHeaders]:
         line = await transport.receive_until(b"\r\n", limit=8192)
         parts = line[:-2].decode("latin-1").split(" ", 2)
-        status = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else 0
+        status = (Digits.decimal(parts[1], width=3) if len(parts) >= 2 else None) or 0
 
         block = bytearray()
 

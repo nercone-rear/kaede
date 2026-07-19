@@ -3,11 +3,14 @@ from typing import Optional, Union, List, Dict, Tuple
 from dataclasses import dataclass
 from collections.abc import AsyncIterator
 
+from ...url import URL
+from ...constants import Digits
 from ...tcp.errors import TCPError
 from ...uds.errors import UDSError
 from ...tls.errors import TLSError
 from ..models import HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
 from ..errors import HTTPError
+from ..finalizer import finalize_response
 from ..helpers.compression import compress, decompress
 from ..helpers.hpack import HPACKEncoder, HPACKDecoder, HPACKError
 from .connection import HTTPConnection, HTTPState
@@ -113,10 +116,13 @@ class H2Settings:
                 setattr(self, H2Settings.IDS[number], value)
 
 class H2Session:
-    def __init__(self, transport, *, server: bool, limits, settings: Optional[H2Settings] = None):
+    CEILING = 0x7FFFFFFF
+
+    def __init__(self, transport, *, server: bool, limits, settings: Optional[H2Settings] = None, observer=None):
         self.transport = transport
         self.server = server
         self.limits = limits
+        self.observer = observer
 
         self.local = settings or H2Settings(max_header_list_size=limits.max_headers_size * 8)
         self.remote = H2Settings()
@@ -137,7 +143,7 @@ class H2Session:
         self.writing = asyncio.Lock()
         self.flow = asyncio.Condition()
 
-        self.pending: Optional[Tuple[int, bytes, bool]] = None # a header block still awaiting CONTINUATION frames
+        self.pending: Optional[Tuple[int, bytes, bool]] = None
         self.closing = False
         self.error: Optional[Exception] = None
 
@@ -217,9 +223,12 @@ class H2Session:
 
         except HTTPError as e:
             if not stream.replied:
-                await stream.fail(e.code)
+                await stream.fail(e.code, e.headers)
 
-        except (H2Error, H2StreamError, TCPError, UDSError, TLSError):
+        except H2StreamError as e:
+            await self.reset(e.stream, e.code)
+
+        except (H2Error, TCPError, UDSError, TLSError):
             pass
 
         except Exception as e:
@@ -282,8 +291,19 @@ class H2Session:
             Frame.CONTINUATION: self.on_continuation,
         }.get(frame.type)
 
-        if dispatch is not None:
+        if dispatch is None:
+            return
+
+        try:
             await dispatch(frame)
+
+        except H2StreamError as e:
+            await self.reset(e.stream, e.code)
+
+    def idle(self, stream: int) -> bool:
+        local = (stream % 2 == 0) if self.server else (stream % 2 == 1)
+
+        return stream >= self.next_stream if local else stream > self.highest_remote
 
     def strip(self, frame: H2Frame) -> bytes:
         payload = frame.payload
@@ -315,6 +335,10 @@ class H2Session:
 
             raise H2Error(Code.PROTOCOL_ERROR, "A DATA frame names an unopened stream.")
 
+        if stream.ended:
+            await self.replenish(0, len(frame.payload))
+            raise H2StreamError(Code.STREAM_CLOSED, frame.stream, "A DATA frame arrived after END_STREAM.")
+
         body = self.strip(frame)
         stream.feed(body)
         await self.replenish(frame.stream, len(frame.payload))
@@ -339,7 +363,15 @@ class H2Session:
         payload = self.strip(frame)
 
         if frame.flags & Flag.PRIORITY:
+            if len(payload) < 5:
+                raise H2Error(Code.FRAME_SIZE_ERROR, "A HEADERS frame with PRIORITY is shorter than its priority fields.")
+
             payload = payload[5:]
+
+        existing = self.streams.get(frame.stream)
+
+        if existing is not None and existing.ended:
+            raise H2StreamError(Code.STREAM_CLOSED, frame.stream, "A HEADERS frame arrived after END_STREAM.")
 
         ended = bool(frame.flags & Flag.END_STREAM)
 
@@ -375,16 +407,14 @@ class H2Session:
 
         if existing is not None:
             if existing.headed:
-                existing.trailer(fields)
+                existing.trailers = existing.trailer(fields)
             else:
-                existing.headed = True
+                existing.absorb(fields)
 
-                try:
-                    existing.absorb(fields)
+                existing.headed = existing.request is not None or existing.response is not None
 
-                except H2StreamError as e:
-                    await self.reset(e.stream, e.code)
-                    return
+                if ended and not existing.headed:
+                    raise H2StreamError(Code.PROTOCOL_ERROR, stream, "An informational response carries END_STREAM.")
 
             if ended:
                 existing.finish()
@@ -404,15 +434,16 @@ class H2Session:
 
         self.highest_remote = stream
         connection = H2Connection(self, stream, server=True)
-        connection.headed = True
         self.streams[stream] = connection
 
         try:
             connection.absorb(fields)
 
-        except H2StreamError as e:
-            await self.reset(e.stream, e.code)
-            return
+        except H2StreamError:
+            self.forget(stream)
+            raise
+
+        connection.headed = True
 
         if ended:
             connection.finish()
@@ -420,11 +451,21 @@ class H2Session:
         await self.arrivals.put(connection)
 
     async def on_priority(self, frame: H2Frame):
-        return
+        if frame.stream == 0:
+            raise H2Error(Code.PROTOCOL_ERROR, "A PRIORITY frame has no stream.")
+
+        if len(frame.payload) != 5:
+            raise H2StreamError(Code.FRAME_SIZE_ERROR, frame.stream, "A PRIORITY frame is not five octets.")
 
     async def on_reset(self, frame: H2Frame):
-        if frame.stream == 0 or len(frame.payload) != 4:
-            raise H2Error(Code.PROTOCOL_ERROR, "A malformed RST_STREAM frame arrived.")
+        if frame.stream == 0:
+            raise H2Error(Code.PROTOCOL_ERROR, "A RST_STREAM frame has no stream.")
+
+        if len(frame.payload) != 4:
+            raise H2Error(Code.FRAME_SIZE_ERROR, "A RST_STREAM frame is not four octets.")
+
+        if self.idle(frame.stream):
+            raise H2Error(Code.PROTOCOL_ERROR, "A RST_STREAM frame names an idle stream.")
 
         stream = self.streams.get(frame.stream)
 
@@ -436,6 +477,9 @@ class H2Session:
             raise H2Error(Code.PROTOCOL_ERROR, "A SETTINGS frame is not on stream zero.")
 
         if frame.flags & Flag.ACK:
+            if frame.payload:
+                raise H2Error(Code.FRAME_SIZE_ERROR, "A SETTINGS acknowledgement carries a payload.")
+
             return
 
         before = self.remote.initial_window_size
@@ -446,6 +490,9 @@ class H2Session:
         if delta:
             for stream in self.streams.values():
                 stream.send_window += delta
+
+                if stream.send_window > H2Session.CEILING:
+                    raise H2Error(Code.FLOW_CONTROL_ERROR, "SETTINGS_INITIAL_WINDOW_SIZE overflowed a stream window.")
 
         self.encoder.capacity = self.remote.header_table_size
 
@@ -472,17 +519,27 @@ class H2Session:
 
         increment = int.from_bytes(frame.payload, "big") & 0x7FFFFFFF
 
+        if frame.stream and self.idle(frame.stream):
+            raise H2Error(Code.PROTOCOL_ERROR, "A WINDOW_UPDATE frame names an idle stream.")
+
         if increment == 0:
             if frame.stream:
-                await self.reset(frame.stream, Code.PROTOCOL_ERROR)
-                return
+                raise H2StreamError(Code.PROTOCOL_ERROR, frame.stream, "A WINDOW_UPDATE increment of zero arrived.")
 
             raise H2Error(Code.PROTOCOL_ERROR, "A WINDOW_UPDATE increment of zero arrived.")
 
         if frame.stream == 0:
             self.send_window += increment
+
+            if self.send_window > H2Session.CEILING:
+                raise H2Error(Code.FLOW_CONTROL_ERROR, "The connection send window exceeded 2^31-1.")
+
         elif frame.stream in self.streams:
-            self.streams[frame.stream].send_window += increment
+            stream = self.streams[frame.stream]
+            stream.send_window += increment
+
+            if stream.send_window > H2Session.CEILING:
+                raise H2StreamError(Code.FLOW_CONTROL_ERROR, frame.stream, "A stream send window exceeded 2^31-1.")
 
         await self.wake()
 
@@ -583,16 +640,22 @@ class H2Session:
                 await self.flow.wait()
 
 class H2Connection(HTTPConnection):
+    FORBIDDEN = frozenset({"connection", "transfer-encoding", "keep-alive", "upgrade", "proxy-connection"})
+
+    REQUEST_PSEUDO  = frozenset({":method", ":scheme", ":path", ":authority"})
+    RESPONSE_PSEUDO = frozenset({":status"})
+
     def __init__(self, session: H2Session, stream: int, *, server: bool):
-        super().__init__(("", None), ("", None), transport=session.transport, version="HTTP/2.0", limits=session.limits)
+        super().__init__(("", None), ("", None), transport=session.transport, version="HTTP/2.0", limits=session.limits, observer=session.observer)
 
         self.session = session
         self.id = stream
         self.server = server
 
         self.headers: List[Tuple[str, str]] = []
-        self.trailers: List[Tuple[str, str]] = []
+        self.trailers: Optional[HTTPHeaders] = None
         self.buffer = bytearray()
+        self.counted = 0
 
         self.request: Optional[HTTPRequest] = None
         self.response: Optional[HTTPResponse] = None
@@ -615,14 +678,25 @@ class H2Connection(HTTPConnection):
 
     def feed(self, data: bytes):
         self.buffer += data
+        self.counted += len(data)
         self.wake()
 
     def finish(self):
         self.ended = True
         self.wake()
 
-    def trailer(self, fields: List[Tuple[str, str]]):
-        self.trailers = fields
+    def trailer(self, fields: List[Tuple[str, str]]) -> HTTPHeaders:
+        pseudo, regular = self.split(fields)
+
+        if pseudo:
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "A trailer section carries a pseudo-header.")
+
+        offender = regular.trailing()
+
+        if offender is not None:
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The trailer section carries the forbidden field {offender!r}.")
+
+        return regular
 
     def abort(self, code: int):
         self.reset_code = code
@@ -634,8 +708,12 @@ class H2Connection(HTTPConnection):
 
         if self.server:
             self.request = self.request_from(pseudo, regular)
-        else:
-            self.response = self.response_from(pseudo, regular)
+            return
+
+        response = self.response_from(pseudo, regular)
+
+        if response.status_code >= 200:
+            self.response = response
 
     def split(self, fields: List[Tuple[str, str]]) -> Tuple[Dict[str, str], HTTPHeaders]:
         pseudo: Dict[str, str] = {}
@@ -643,6 +721,9 @@ class H2Connection(HTTPConnection):
         seen_regular = False
 
         for name, value in fields:
+            if name != name.lower():
+                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The field name {name!r} is not lowercase.")
+
             if name.startswith(":"):
                 if seen_regular:
                     raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "A pseudo-header follows a regular header.")
@@ -651,45 +732,106 @@ class H2Connection(HTTPConnection):
                     raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The pseudo-header {name} is repeated.")
 
                 pseudo[name] = value
-            else:
-                seen_regular = True
+                continue
 
-                if name in ("connection", "transfer-encoding", "keep-alive", "upgrade", "proxy-connection"):
-                    raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The connection-specific header {name!r} is forbidden in HTTP/2.")
+            seen_regular = True
 
-                if name == "te" and value.lower() != "trailers":
-                    raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "The te header may only be 'trailers' in HTTP/2.")
+            if name in H2Connection.FORBIDDEN:
+                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The connection-specific header {name!r} is forbidden in HTTP/2.")
 
-                if name != name.lower():
-                    raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "A header field name is not lowercase.")
+            if name == "te" and value.lower() != "trailers":
+                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "The te header may only be 'trailers' in HTTP/2.")
 
+            if HTTPHeaders.spaced(value):
+                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The value of the {name!r} header is padded with whitespace.")
+
+            try:
                 regular.append(name, value)
+
+            except ValueError as e:
+                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, str(e))
 
         return (pseudo, regular)
 
     def request_from(self, pseudo: Dict[str, str], regular: HTTPHeaders) -> HTTPRequest:
-        for required in (":method", ":scheme", ":path"):
-            if required not in pseudo:
-                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The request is missing {required}.")
-
         for name in pseudo:
-            if name not in (":method", ":scheme", ":path", ":authority"):
+            if name not in H2Connection.REQUEST_PSEUDO:
                 raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"{name} is not a valid request pseudo-header.")
 
-        if not pseudo[":path"]:
-            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "The :path pseudo-header is empty.")
+        method = pseudo.get(":method")
 
-        if ":authority" in pseudo:
-            regular.set("Host", pseudo[":authority"], override=False)
+        if not method:
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "The request is missing :method.")
 
-        request = HTTPRequest(version="HTTP/2.0", method=pseudo[":method"], target=pseudo[":path"], headers=regular, secure=pseudo[":scheme"] == "https")
-        return request
+        if method == "CONNECT":
+            if ":scheme" in pseudo or ":path" in pseudo:
+                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "A CONNECT request carries :scheme or :path.")
+
+            if not pseudo.get(":authority"):
+                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "A CONNECT request carries no :authority.")
+        else:
+            for required in (":scheme", ":path"):
+                if not pseudo.get(required):
+                    raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"The request is missing {required}.")
+
+        self.authority(pseudo, regular)
+
+        return HTTPRequest(version="HTTP/2.0", method=method, target=pseudo.get(":path", ""), headers=regular, secure=pseudo.get(":scheme", "https") == "https")
+
+    def authority(self, pseudo: Dict[str, str], regular: HTTPHeaders):
+        given = pseudo.get(":authority")
+        hosts = regular.values("Host")
+
+        if len(hosts) > 1:
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "More than one Host header field line is present.")
+
+        if given is None and not hosts:
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "The request carries neither :authority nor Host.")
+
+        target = given if given is not None else hosts[0]
+
+        if not target or not URL.authority(target):
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "The request authority is not valid.")
+
+        if hosts and given is not None and hosts[0] != given:
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "The Host header field disagrees with :authority.")
+
+        regular.set("Host", target)
 
     def response_from(self, pseudo: Dict[str, str], regular: HTTPHeaders) -> HTTPResponse:
-        if ":status" not in pseudo or not pseudo[":status"].isdigit():
+        for name in pseudo:
+            if name not in H2Connection.RESPONSE_PSEUDO:
+                raise H2StreamError(Code.PROTOCOL_ERROR, self.id, f"{name} is not a valid response pseudo-header.")
+
+        code = Digits.decimal(pseudo.get(":status", ""), width=3)
+
+        if code is None:
             raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "The response is missing a valid :status.")
 
-        return HTTPResponse(version="HTTP/2.0", status_code=int(pseudo[":status"]), headers=regular, secure=self.secure)
+        return HTTPResponse(version="HTTP/2.0", status_code=code, headers=regular, secure=self.secure)
+
+    def bodiless(self, response: HTTPResponse) -> bool:
+        return response.status_code < 200 or response.status_code in (204, 304) or (self.request is not None and self.request.method == "HEAD")
+
+    def lengthless(self, response: HTTPResponse) -> bool:
+        return response.status_code < 200 or response.status_code == 204
+
+    def verify(self, message: HTTPMessage):
+        if isinstance(message, HTTPResponse) and self.bodiless(message):
+            return
+
+        declared = {token.strip() for value in message.headers.values("Content-Length") for token in value.split(",") if token.strip()}
+
+        if not declared:
+            return
+
+        length = Digits.decimal(next(iter(declared))) if len(declared) == 1 else None
+
+        if length is None:
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "Content-Length is malformed.")
+
+        if length != self.counted:
+            raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "Content-Length does not equal the length of the body received.")
 
     # -- receiving -------------------------------------------------------
 
@@ -713,10 +855,12 @@ class H2Connection(HTTPConnection):
         message.body = bytes(self.buffer)
         self.buffer.clear()
 
-        if self.trailers:
-            message.trailers = HTTPHeaders(self.trailers)
+        if self.trailers is not None:
+            message.trailers = self.trailers
 
+        self.verify(message)
         self.absorb_encoding(message)
+        self.observe(message)
         self.state = HTTPState.RECEIVED
 
         if not self.server:
@@ -772,17 +916,33 @@ class H2Connection(HTTPConnection):
         self.state = HTTPState.SENT
 
     async def send_response(self, response: HTTPResponse):
-        if response.compression and self.request is not None:
+        bodiless = self.bodiless(response)
+
+        await finalize_response(response)
+
+        if response.compression and self.request is not None and not bodiless:
             compress(response, self.request.headers.get("Accept-Encoding", ""), limits=self.limits)
 
-        fields = [(":status", str(response.status_code))] + self.regular(response.headers)
-        bodiless = response.status_code < 200 or response.status_code in (204, 304) or (self.request is not None and self.request.method == "HEAD")
+        headers = response.headers
+        streaming = isinstance(response.body, AsyncIterator)
+        payload = b"" if streaming else self.body_bytes(response)
 
-        body = b"" if bodiless else self.body_bytes(response)
+        if streaming or self.lengthless(response):
+            headers.remove("Content-Length")
+        else:
+            headers.set("Content-Length", str(len(payload)))
 
-        await self.session.send_headers(self.id, fields, end_stream=not body and not isinstance(response.body, AsyncIterator))
+        fields = [(":status", str(response.status_code))] + self.regular(headers)
 
-        if not bodiless and isinstance(response.body, AsyncIterator):
+        if response.status_code < 200:
+            await self.session.send_headers(self.id, fields, end_stream=False)
+            return
+
+        body = b"" if bodiless else payload
+
+        await self.session.send_headers(self.id, fields, end_stream=not body and not (streaming and not bodiless))
+
+        if not bodiless and streaming:
             async for chunk in response.body:
                 if chunk:
                     await self.session.send_data(self, chunk, end_stream=False)
@@ -818,9 +978,9 @@ class H2Connection(HTTPConnection):
 
         return bytes(body)
 
-    async def fail(self, code: int):
+    async def fail(self, code: int, headers: Optional[HTTPHeaders] = None):
         try:
-            await self.send_response(HTTPResponse(version="HTTP/2.0", status_code=code, headers=HTTPHeaders(), body=b"", compression=False))
+            await self.send_response(HTTPResponse(version="HTTP/2.0", status_code=code, headers=headers or HTTPHeaders(), body=b"", compression=False))
 
         except (HTTPError, H2Error, H2StreamError, TCPError, UDSError, TLSError):
             await self.reset(Code.INTERNAL_ERROR)

@@ -1,5 +1,7 @@
 from typing import Optional, Union, Literal, List, Dict, Tuple, TypeVar
 
+from ..constants import Characters, Digits
+
 T = TypeVar("T")
 
 class CommaHeader:
@@ -107,6 +109,21 @@ class AcceptEncoding:
 
         return weight is not None and weight > 0
 
+    @staticmethod
+    def weight(text: str) -> Optional[float]:
+        whole, dot, decimals = text.partition(".")
+
+        if whole not in ("0", "1"):
+            return None
+
+        if dot and (len(decimals) > 3 or not Characters.DIGIT.issuperset(decimals)):
+            return None
+
+        if whole == "1" and decimals.strip("0"):
+            return None
+
+        return float(text if not dot or decimals else whole)
+
     @classmethod
     def parse(cls, value: str) -> "AcceptEncoding":
         codings: List[Tuple[str, float]] = []
@@ -114,17 +131,19 @@ class AcceptEncoding:
         for entry in CommaHeader.parse(value).raw:
             name, _, parameters = entry.partition(";")
             weight = 1.0
+            broken = False
 
             for parameter in parameters.split(";"):
                 key, sep, raw = parameter.partition("=")
 
                 if sep and key.strip().lower() == "q":
-                    try:
-                        weight = float(raw.strip())
-                    except ValueError:
-                        weight = 0.0
+                    found = AcceptEncoding.weight(raw.strip())
 
-            codings.append((name.strip().lower(), weight))
+                    broken = found is None
+                    weight = 1.0 if found is None else found
+
+            if not broken:
+                codings.append((name.strip().lower(), weight))
 
         return cls(codings)
 
@@ -171,7 +190,7 @@ class ETag:
     def __init__(self, value: Union[str, "ETag"]):
         if isinstance(value, str):
             self.value = value
-            self.weak = self.value.startswith(("w/", "W/"))
+            self.weak = self.value.startswith("W/")
         elif isinstance(value, ETag):
             self.value = value.value
             self.weak = value.weak
@@ -186,7 +205,13 @@ class ETag:
         else:
             return self.value
 
-    def match(self, other: Union[str, "ETag"], strong: bool = True, weak: bool = True) -> bool:
+    @property
+    def valid(self) -> bool:
+        tag = self.opaque_tag
+
+        return len(tag) >= 2 and tag.startswith('"') and tag.endswith('"') and all(character == 0x21 or 0x23 <= character <= 0x7E for character in tag[1:-1].encode("latin-1", "replace"))
+
+    def match(self, other: Union[str, "ETag"], strong: bool = True, weak: bool = False) -> bool:
         if strong and self.strong_match(other):
             return True
 
@@ -258,6 +283,16 @@ class SetCookie:
     def __str__(self) -> str:
         return self.build()
 
+    @staticmethod
+    def age(text: str) -> Optional[int]:
+        digits = text[1:] if text.startswith("-") else text
+        value = Digits.decimal(digits)
+
+        if value is None:
+            return None
+
+        return -value if text.startswith("-") else value
+
     @classmethod
     def parse(cls, value: str) -> "SetCookie":
         parts = value.split(";")
@@ -274,7 +309,7 @@ class SetCookie:
         return cls(
             name.strip(), first.strip(),
             expires=fields.get("expires"),
-            max_age=int(fields["max-age"]) if fields.get("max-age", "").lstrip("-").isdigit() else None,
+            max_age=SetCookie.age(fields.get("max-age", "")),
             domain=fields.get("domain"),
             path=fields.get("path"),
             secure="secure" in fields,

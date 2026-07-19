@@ -1,6 +1,6 @@
 from typing import List, Dict, Tuple
 
-from .hpack import Huffman, Coding, HPACKError
+from .hpack import Huffman, Coding, HPACKError, HPACKField, HPACKTable
 
 class QPACKError(Exception):
     """A malformed QPACK block, which HTTP/3 treats as a QPACK_DECOMPRESSION_FAILED error."""
@@ -36,7 +36,7 @@ STATIC: List[Tuple[str, str]] = [
     (':status', '404'),
     (':status', '503'),
     ('accept', '*/*'),
-    ('accept', 'application/dns-'),
+    ('accept', 'application/dns-message'),
     ('accept-encoding', 'gzip, deflate, br'),
     ('accept-ranges', 'bytes'),
     ('access-control-allow-headers', 'cache-control'),
@@ -47,24 +47,24 @@ STATIC: List[Tuple[str, str]] = [
     ('cache-control', 'max-age=604800'),
     ('cache-control', 'no-cache'),
     ('cache-control', 'no-store'),
-    ('cache-control', 'public, max-'),
+    ('cache-control', 'public, max-age=31536000'),
     ('content-encoding', 'br'),
     ('content-encoding', 'gzip'),
-    ('content-type', 'application/dns-'),
-    ('content-type', 'application/'),
+    ('content-type', 'application/dns-message'),
+    ('content-type', 'application/javascript'),
     ('content-type', 'application/json'),
-    ('content-type', 'application/x-www-'),
+    ('content-type', 'application/x-www-form-urlencoded'),
     ('content-type', 'image/gif'),
     ('content-type', 'image/jpeg'),
     ('content-type', 'image/png'),
     ('content-type', 'text/css'),
-    ('content-type', 'text/html;'),
+    ('content-type', 'text/html; charset=utf-8'),
     ('content-type', 'text/plain'),
-    ('content-type', 'text/'),
+    ('content-type', 'text/plain;charset=utf-8'),
     ('range', 'bytes=0-'),
     ('strict-transport-security', 'max-age=31536000'),
-    ('strict-transport-security', 'max-age=31536000;'),
-    ('strict-transport-security', 'max-age=31536000;'),
+    ('strict-transport-security', 'max-age=31536000; includesubdomains'),
+    ('strict-transport-security', 'max-age=31536000; includesubdomains; preload'),
     ('vary', 'accept-encoding'),
     ('vary', 'origin'),
     ('x-content-type-options', 'nosniff'),
@@ -91,7 +91,7 @@ STATIC: List[Tuple[str, str]] = [
     ('access-control-request-method', 'post'),
     ('alt-svc', 'clear'),
     ('authorization', ''),
-    ('content-security-policy', "script-src 'none';"),
+    ('content-security-policy', "script-src 'none'; object-src 'none'; base-uri 'none'"),
     ('early-data', '1'),
     ('expect-ct', ''),
     ('forwarded', ''),
@@ -118,15 +118,19 @@ class QPACKEncoder:
     def encode(self, headers: List[Tuple[str, str]]) -> bytes:
         out = bytearray(b"\x00\x00")
 
-        for name, value in headers:
+        for field in headers:
+            name, value = field
             name = name.lower()
+
+            never = getattr(field, "never", None)
+            never = name in SENSITIVE if never is None else never
+
             exact = STATIC_INDEX.get((name, value))
 
-            if exact is not None:
+            if exact is not None and not never:
                 out += Coding.integer(exact, 6, 0xC0)
                 continue
 
-            never = name in SENSITIVE
             named = STATIC_NAMES.get(name)
 
             if named is not None:
@@ -140,7 +144,7 @@ class QPACKEncoder:
 
     def name(self, name: str, never: bool) -> bytes:
         flags = 0x20 | (0x10 if never else 0)
-        raw = name.encode()
+        raw = name.encode("latin-1")
         packed = Huffman.encode(raw)
 
         if len(packed) < len(raw):
@@ -167,30 +171,34 @@ class QPACKDecoder:
         if offset >= len(data):
             raise QPACKError("The field section prefix is truncated.")
 
-        base, offset = Coding.read_integer(data, offset, 7)
+        negative = bool(data[offset] & 0x80)
+        delta, offset = Coding.read_integer(data, offset, 7)
 
         if ric != 0:
             raise QPACKError("The Required Insert Count is not zero, but no dynamic table was offered.")
+
+        if negative or delta != 0:
+            raise QPACKError("The Base does not match a Required Insert Count of zero.")
 
         fields: List[Tuple[str, str]] = []
         total = 0
 
         while offset < len(data):
-            name, value, offset = self.line(data, offset)
+            name, value, never, offset = self.line(data, offset)
 
-            total += len(name.encode()) + len(value.encode()) + 32
+            total += HPACKTable.cost(name, value)
 
             if total > self.max_header_list:
                 raise QPACKError("The decoded header list is larger than allowed.")
 
-            fields.append((name, value))
+            fields.append(HPACKField(name, value, never))
 
         return fields
 
-    def line(self, data: bytes, offset: int) -> Tuple[str, str, int]:
+    def line(self, data: bytes, offset: int) -> Tuple[str, str, bool, int]:
         byte = data[offset]
 
-        if byte & 0x80: # indexed field line
+        if byte & 0x80: # indexed field line, §4.5.2
             static = bool(byte & 0x40)
             index, offset = Coding.read_integer(data, offset, 6)
 
@@ -198,9 +206,10 @@ class QPACKDecoder:
                 raise QPACKError("An indexed field line references the dynamic table.")
 
             name, value = self.entry(index)
-            return (name, value, offset)
+            return (name, value, False, offset)
 
-        if byte & 0x40: # literal field line with name reference
+        if byte & 0x40: # literal field line with name reference, §4.5.4
+            never = bool(byte & 0x20)
             static = bool(byte & 0x10)
             index, offset = Coding.read_integer(data, offset, 4)
 
@@ -209,9 +218,10 @@ class QPACKDecoder:
 
             name, _ = self.entry(index)
             value, offset = self.string(data, offset)
-            return (name, value, offset)
+            return (name, value, never, offset)
 
-        if byte & 0x20: # literal field line with literal name
+        if byte & 0x20: # literal field line with literal name, §4.5.6
+            never = bool(byte & 0x10)
             huffman = bool(byte & 0x08)
             length, offset = Coding.read_integer(data, offset, 3)
 
@@ -221,9 +231,14 @@ class QPACKDecoder:
             raw = data[offset:offset + length]
             offset += length
 
-            name = (Huffman.decode(raw) if huffman else raw).decode("latin-1")
+            try:
+                name = (Huffman.decode(raw) if huffman else raw).decode("latin-1")
+
+            except HPACKError as e:
+                raise QPACKError(str(e))
+
             value, offset = self.string(data, offset)
-            return (name, value, offset)
+            return (name, value, never, offset)
 
         raise QPACKError("The field line references the dynamic table, which is not offered.")
 

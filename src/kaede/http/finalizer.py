@@ -22,7 +22,9 @@ async def finalize_response(response: HTTPResponse, role: HTTPRole = HTTPRole.OR
     if response.headers is None:
         response.headers = HTTPHeaders()
 
-    response.headers.set("Date", email.utils.formatdate(time.time(), usegmt=True), override=False)
+    if response.status_code >= 200:
+        response.headers.set("Date", email.utils.formatdate(time.time(), usegmt=True), override=False)
+
     response.headers.set("Server", "Kaede", override=False)
 
     return response

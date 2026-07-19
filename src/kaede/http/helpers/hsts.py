@@ -1,6 +1,9 @@
 import time
+import ipaddress
 from typing import Optional, Dict, Tuple
 from dataclasses import dataclass
+
+from ...constants import Digits
 
 @dataclass
 class HSTSPolicy:
@@ -20,50 +23,98 @@ class HSTSPolicy:
         return value
 
     @classmethod
-    def parse(cls, value: str) -> "HSTSPolicy":
-        policy = cls(max_age=0)
+    def parse(cls, value: str) -> Optional["HSTSPolicy"]:
+        policy = cls(max_age=-1)
+        seen = set()
 
         for directive in value.split(";"):
-            name, _, raw = directive.partition("=")
+            name, equals, raw = directive.partition("=")
             name = name.strip().lower()
 
+            if not name:
+                continue
+
+            if name in seen:
+                return None
+
+            seen.add(name)
+
             if name == "max-age":
-                digits = raw.strip().strip('"')
-                policy.max_age = int(digits) if digits.isdigit() else 0
+                digits = raw.strip()
+                digits = digits[1:-1] if len(digits) >= 2 and digits.startswith('"') and digits.endswith('"') else digits
+                age = Digits.decimal(digits) if equals else None
+
+                if age is None:
+                    return None
+
+                policy.max_age = age
+
             elif name == "includesubdomains":
                 policy.include_subdomains = True
+
             elif name == "preload":
                 policy.preload = True
 
-        return policy
+        return policy if policy.max_age >= 0 else None
 
 class HSTSStore:
     def __init__(self):
         self.entries: Dict[str, Tuple[float, bool]] = {}
 
-    def remember(self, host: str, policy: HSTSPolicy, now: Optional[float] = None):
-        host = host.lower().rstrip(".")
+    def normalize(self, host: str) -> Optional[str]:
+        host = host.strip().strip("[]").rstrip(".")
 
-        if policy.max_age <= 0:
-            self.entries.pop(host, None)
+        if not host:
+            return None
+
+        try:
+            ipaddress.ip_address(host)
+            return None
+
+        except ValueError:
+            pass
+
+        try:
+            return host.encode("idna").decode("ascii").lower()
+
+        except UnicodeError:
+            return host.lower()
+
+    def remember(self, host: str, policy: HSTSPolicy, now: Optional[float] = None):
+        name = self.normalize(host)
+
+        if name is None:
             return
 
-        self.entries[host] = ((time.monotonic() if now is None else now) + policy.max_age, policy.include_subdomains)
+        if policy.max_age <= 0:
+            self.entries.pop(name, None)
+            return
+
+        self.entries[name] = ((time.monotonic() if now is None else now) + policy.max_age, policy.include_subdomains)
 
     def learn(self, host: str, header: str, *, secure: bool = True, now: Optional[float] = None):
-        if secure:
-            self.remember(host, HSTSPolicy.parse(header), now)
+        if not secure:
+            return
+
+        policy = HSTSPolicy.parse(header)
+
+        if policy is not None:
+            self.remember(host, policy, now)
 
     def secure(self, host: str, now: Optional[float] = None) -> bool:
-        host = host.lower().rstrip(".")
+        name = self.normalize(host)
+
+        if name is None:
+            return False
+
         moment = time.monotonic() if now is None else now
 
-        for name, (expires, subdomains) in list(self.entries.items()):
+        for stored, (expires, subdomains) in list(self.entries.items()):
             if expires <= moment:
-                del self.entries[name]
+                del self.entries[stored]
                 continue
 
-            if host == name or (subdomains and host.endswith("." + name)):
+            if name == stored or (subdomains and name.endswith("." + stored)):
                 return True
 
         return False

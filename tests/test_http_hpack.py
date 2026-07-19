@@ -2,6 +2,78 @@ import pytest
 
 from kaede.http.helpers.hpack import Huffman, HPACKEncoder, HPACKDecoder, Coding, HPACKError, STATIC
 
+# RFC 7541 Appendix A, transcribed from the document rather than from the implementation.
+RFC_STATIC = [
+    (':authority', ''),
+    (':method', 'GET'),
+    (':method', 'POST'),
+    (':path', '/'),
+    (':path', '/index.html'),
+    (':scheme', 'http'),
+    (':scheme', 'https'),
+    (':status', '200'),
+    (':status', '204'),
+    (':status', '206'),
+    (':status', '304'),
+    (':status', '400'),
+    (':status', '404'),
+    (':status', '500'),
+    ('accept-charset', ''),
+    ('accept-encoding', 'gzip, deflate'),
+    ('accept-language', ''),
+    ('accept-ranges', ''),
+    ('accept', ''),
+    ('access-control-allow-origin', ''),
+    ('age', ''),
+    ('allow', ''),
+    ('authorization', ''),
+    ('cache-control', ''),
+    ('content-disposition', ''),
+    ('content-encoding', ''),
+    ('content-language', ''),
+    ('content-length', ''),
+    ('content-location', ''),
+    ('content-range', ''),
+    ('content-type', ''),
+    ('cookie', ''),
+    ('date', ''),
+    ('etag', ''),
+    ('expect', ''),
+    ('expires', ''),
+    ('from', ''),
+    ('host', ''),
+    ('if-match', ''),
+    ('if-modified-since', ''),
+    ('if-none-match', ''),
+    ('if-range', ''),
+    ('if-unmodified-since', ''),
+    ('last-modified', ''),
+    ('link', ''),
+    ('location', ''),
+    ('max-forwards', ''),
+    ('proxy-authenticate', ''),
+    ('proxy-authorization', ''),
+    ('range', ''),
+    ('referer', ''),
+    ('refresh', ''),
+    ('retry-after', ''),
+    ('server', ''),
+    ('set-cookie', ''),
+    ('strict-transport-security', ''),
+    ('transfer-encoding', ''),
+    ('user-agent', ''),
+    ('vary', ''),
+    ('via', ''),
+    ('www-authenticate', ''),
+]
+
+class TestStaticTable:
+    def test_every_entry_matches_the_rfc(self):
+        assert len(STATIC) == len(RFC_STATIC) == 61
+
+        for index, (expected, found) in enumerate(zip(RFC_STATIC, STATIC), 1):
+            assert tuple(found) == expected, f"static table index {index} does not match RFC 7541"
+
 class TestHuffman:
     # RFC 7541 Appendix C string vectors.
     def test_known_strings(self):

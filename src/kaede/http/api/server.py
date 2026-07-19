@@ -226,14 +226,28 @@ class HTTPServer:
         finally:
             await h1.close()
 
+    def keyed(self, key: str) -> bool:
+        from base64 import b64decode
+
+        try:
+            return len(b64decode(key, validate=True)) == 16
+
+        except (ValueError, TypeError):
+            return False
+
     async def upgrade(self, h1: H1Connection, connection):
         request = h1.request
         key = request.headers.get("Sec-WebSocket-Key", "")
         version = request.headers.get("Sec-WebSocket-Version", "")
 
-        if version != "13" or not key:
-            headers = HTTPHeaders([("Sec-WebSocket-Version", "13")])
-            await self.error(h1, HTTPError(426, "Upgrade Required"))
+        if version != "13" or not self.keyed(key):
+            headers = HTTPHeaders([
+                ("Upgrade", "websocket"),
+                ("Connection", "Upgrade"),
+                ("Sec-WebSocket-Version", "13"),
+            ])
+
+            await self.error(h1, HTTPError(426, "Upgrade Required", headers))
             return
 
         headers = HTTPHeaders([
@@ -265,7 +279,7 @@ class HTTPServer:
     async def error(self, h1: H1Connection, exc: HTTPError):
         try:
             h1.closing = True
-            response = HTTPResponse(status_code=exc.code, headers=HTTPHeaders(), body=(exc.message or "").encode(), compression=False)
+            response = HTTPResponse(status_code=exc.code, headers=exc.headers or HTTPHeaders(), body=(exc.message or "").encode(), compression=False)
             await h1.send(await finalize_response(response, self.role))
 
         except (HTTPError, TCPError, UDSError, TLSError):

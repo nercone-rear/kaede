@@ -4,6 +4,21 @@ from collections import deque
 class HPACKError(Exception):
     """A malformed HPACK block, which HTTP/2 treats as a COMPRESSION_ERROR."""
 
+class HPACKField(tuple):
+    def __new__(cls, name: str, value: str, never: bool = False):
+        field = super().__new__(cls, (name, value))
+        field.never = never
+
+        return field
+
+    @property
+    def name(self) -> str:
+        return self[0]
+
+    @property
+    def value(self) -> str:
+        return self[1]
+
 class Huffman:
     CODES = [
         (0x1ff8, 13),
@@ -305,6 +320,8 @@ class Huffman:
                 bits -= 8
                 out.append((acc >> bits) & 0xFF)
 
+            acc &= (1 << bits) - 1
+
         if bits:
             out.append(((acc << (8 - bits)) | ((1 << (8 - bits)) - 1)) & 0xFF)
 
@@ -419,12 +436,16 @@ class HPACKTable:
         self.size = 0
         self.entries: deque = deque()
 
+    @staticmethod
+    def cost(name: str, value: str) -> int:
+        return len(name) + len(value) + 32
+
     def add(self, name: str, value: str):
-        cost = len(name.encode()) + len(value.encode()) + 32
+        cost = HPACKTable.cost(name, value)
 
         while self.entries and self.size + cost > self.capacity:
             old = self.entries.pop()
-            self.size -= len(old[0].encode()) + len(old[1].encode()) + 32
+            self.size -= HPACKTable.cost(old[0], old[1])
 
         if cost <= self.capacity:
             self.entries.appendleft((name, value))
@@ -441,7 +462,7 @@ class HPACKTable:
 
         while self.entries and self.size > self.capacity:
             old = self.entries.pop()
-            self.size -= len(old[0].encode()) + len(old[1].encode()) + 32
+            self.size -= HPACKTable.cost(old[0], old[1])
 
     def __len__(self) -> int:
         return len(self.entries)
@@ -490,14 +511,23 @@ class Coding:
             if not byte & 0x80:
                 break
 
-            if shift > 42:
+            # RFC 9204 §4.1.1 asks a QPACK decoder to handle prefixed integers up to 62 bits,
+            # and this reader serves QPACK as well, so the ceiling is the QUIC varint maximum.
+            if shift > 63:
                 raise HPACKError("An HPACK integer is too long.")
+
+        if value > 0x3FFFFFFFFFFFFFFF:
+            raise HPACKError("An HPACK integer is larger than 62 bits.")
 
         return (value, offset)
 
     @staticmethod
     def string(value: str, huffman: bool = True) -> bytes:
-        raw = value.encode()
+        # A field value is opaque octets on the wire, and HTTP/1.x already reads and writes
+        # them as latin-1, so the same mapping is used here. Encoding as UTF-8 would make
+        # the round trip non injective: the octet e9 and the octets c3 a9 both came back as
+        # c3 a9, so a value that survived a decode was corrupted by the matching encode.
+        raw = value.encode("latin-1")
         packed = Huffman.encode(raw)
 
         if huffman and len(packed) < len(raw):
@@ -521,11 +551,7 @@ class Coding:
 
         decoded = Huffman.decode(raw) if huffman else raw
 
-        try:
-            return (decoded.decode(), offset)
-
-        except UnicodeDecodeError:
-            return (decoded.decode("latin-1"), offset)
+        return (decoded.decode("latin-1"), offset)
 
 class HPACKEncoder:
     def __init__(self, capacity: int = 4096):
@@ -534,20 +560,23 @@ class HPACKEncoder:
     def encode(self, headers: List[Tuple[str, str]]) -> bytes:
         out = bytearray()
 
-        for name, value in headers:
+        for field in headers:
+            name, value = field
             name = name.lower()
+
+            # A field that arrived never-indexed stays never-indexed. The SENSITIVE set is
+            # only the fallback for fields Kaede itself originates, where no sender said.
+            never = getattr(field, "never", None)
+            never = name in SENSITIVE if never is None else never
+
             indexed = STATIC_INDEX.get((name, value))
 
-            if indexed is not None:
+            if indexed is not None and not never:
                 out += Coding.integer(indexed, 7, 0x80)
                 continue
 
             named = STATIC_NAMES.get(name)
-
-            if name in SENSITIVE:
-                out += Coding.integer(named or 0, 4, 0x10)
-            else:
-                out += Coding.integer(named or 0, 4, 0x00)
+            out += Coding.integer(named or 0, 4, 0x10 if never else 0x00)
 
             if not named:
                 out += Coding.string(name)
@@ -578,6 +607,7 @@ class HPACKDecoder:
 
         while offset < len(data):
             byte = data[offset]
+            never = False
 
             if byte & 0x80: # indexed header field
                 index, offset = Coding.read_integer(data, offset, 7)
@@ -597,14 +627,15 @@ class HPACKDecoder:
                 continue
 
             else: # literal without indexing (0x00) or never indexed (0x10)
+                never = bool(byte & 0x10)
                 name, value, offset = self.literal(data, offset, 4)
 
-            total += len(name.encode()) + len(value.encode()) + 32
+            total += HPACKTable.cost(name, value)
 
             if total > self.max_header_list:
                 raise HPACKError("The decoded header list is larger than the negotiated maximum.")
 
-            headers.append((name, value))
+            headers.append(HPACKField(name, value, never))
 
         return headers
 

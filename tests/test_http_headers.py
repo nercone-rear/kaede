@@ -1,7 +1,7 @@
 import pytest
 
 from kaede.http.models import HTTPHeaders, HTTPHeaderCase
-from kaede.http.headers import Cookie, SetCookie, AcceptEncoding, ContentType, Link
+from kaede.http.headers import Cookie, SetCookie, AcceptEncoding, ContentType, ETag, Link
 from kaede.http.helpers.hsts import HSTSPolicy, HSTSStore
 
 class TestHTTPHeaders:
@@ -138,3 +138,98 @@ class TestHSTS:
         store.learn("example.com", "max-age=100", secure=False, now=1000.0)
 
         assert not store.secure("example.com", now=1050.0)
+
+class TestHSTSPolicyValidity:
+    """RFC 6797 §6.1: a header field that cannot be parsed is ignored.
+
+    Reading a malformed header as a zero max-age deletes the stored policy instead, which
+    turns any broken or truncated header into a downgrade path for the whole host.
+    """
+
+    @pytest.mark.parametrize("value", ["includeSubDomains", "max-age=abc", "", "preload", "max-age", "max-age=-5", "max-age=5; max-age=6"])
+    def test_a_header_without_a_valid_max_age_is_not_a_policy(self, value):
+        assert HSTSPolicy.parse(value) is None
+
+    @pytest.mark.parametrize("value,age", [("max-age=100", 100), ('max-age="100"', 100), ("max-age=0", 0), ("Max-Age=7; includeSubDomains", 7)])
+    def test_a_valid_header_is_read(self, value, age):
+        assert HSTSPolicy.parse(value).max_age == age
+
+    def test_a_broken_header_leaves_a_stored_policy_in_place(self):
+        store = HSTSStore()
+        store.learn("example.com", "max-age=31536000")
+
+        store.learn("example.com", "includeSubDomains")
+        store.learn("example.com", "max-age=abc")
+        store.learn("example.com", "")
+
+        assert store.secure("example.com")
+
+    def test_a_zero_max_age_still_removes_the_policy(self):
+        # §6.1.1: max-age=0 is the documented way to say the host is no longer a Known Host.
+        store = HSTSStore()
+        store.learn("example.com", "max-age=31536000")
+        store.learn("example.com", "max-age=0")
+
+        assert not store.secure("example.com")
+
+class TestHSTSHosts:
+    @pytest.mark.parametrize("host", ["192.0.2.1", "2001:db8::1", "[2001:db8::1]"])
+    def test_an_ip_address_is_never_a_known_host(self, host):
+        # §8.1.1: an IP address MUST NOT be recorded as a Known HSTS Host.
+        store = HSTSStore()
+        store.learn(host, "max-age=31536000")
+
+        assert not store.secure(host)
+
+    def test_a_name_is_compared_after_idna_and_case_folding(self):
+        # §8.1 compares the canonicalised form, so the spelling used to store a policy must
+        # not decide whether a later lookup finds it.
+        store = HSTSStore()
+        store.learn("EXAMPLE.com.", "max-age=31536000")
+
+        assert store.secure("example.com")
+        assert store.secure("Example.COM")
+
+    def test_subdomains_are_only_covered_when_the_policy_says_so(self):
+        store = HSTSStore()
+        store.learn("example.com", "max-age=31536000")
+
+        assert not store.secure("a.example.com")
+
+        store.learn("example.com", "max-age=31536000; includeSubDomains")
+
+        assert store.secure("a.example.com")
+        assert not store.secure("notexample.com")
+
+class TestSetCookieMaxAge:
+    """RFC 6265 §5.2.2: a Max-Age that is not an optional "-" followed by digits is ignored."""
+
+    @pytest.mark.parametrize("value", ["--5", "\xb2", "abc", "", "5-", "+5", "5.0"])
+    def test_a_malformed_max_age_is_ignored_rather_than_raised(self, value):
+        assert SetCookie.parse(f"a=b; Max-Age={value}").max_age is None
+
+    @pytest.mark.parametrize("value,age", [("60", 60), ("-5", -5), ("0", 0)])
+    def test_a_valid_max_age_is_read(self, value, age):
+        assert SetCookie.parse(f"a=b; Max-Age={value}").max_age == age
+
+class TestETagWeakness:
+    """RFC 9110 §8.8.3 writes the weak indicator as %s"W/", which is case sensitive."""
+
+    def test_the_indicator_is_case_sensitive(self):
+        assert ETag('W/"abc"').weak
+        assert not ETag('w/"abc"').weak
+
+    def test_a_lowercase_indicator_does_not_weaken_a_comparison(self):
+        # w/"abc" is an opaque tag in its own right, not a weak form of "abc".
+        assert not ETag('w/"abc"').strong_match('"abc"')
+
+    def test_a_strong_comparison_needs_both_sides_strong(self):
+        assert ETag('"abc"').strong_match('"abc"')
+        assert not ETag('W/"abc"').strong_match('"abc"')
+
+    def test_a_weak_comparison_ignores_the_indicator(self):
+        assert ETag('W/"abc"').weak_match('"abc"')
+
+    @pytest.mark.parametrize("value,ok", [('"abc"', True), ('W/"abc"', True), ("abc", False), ('"', False), ("", False)])
+    def test_the_syntax_requires_a_quoted_opaque_tag(self, value, ok):
+        assert ETag(value).valid == ok

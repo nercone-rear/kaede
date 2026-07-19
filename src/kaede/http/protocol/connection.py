@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Callable, Tuple
 
 from ...tcp import TCPConnection
 from ...udp import UDPConnection
@@ -23,7 +23,7 @@ class HTTPState(Enum):
     RECEIVED_TRAILERS  = "Received Trailers"
 
 class HTTPConnection:
-    def __init__(self, src: Tuple[str, HTTPPort], dst: Tuple[str, HTTPPort], *, transport: Union[TCPConnection, UDPConnection, QUICConnection], state: Optional[HTTPState] = None, version: Optional[HTTPVersion] = None, limits: Optional[HTTPLimits] = None):
+    def __init__(self, src: Tuple[str, HTTPPort], dst: Tuple[str, HTTPPort], *, transport: Union[TCPConnection, UDPConnection, QUICConnection], state: Optional[HTTPState] = None, version: Optional[HTTPVersion] = None, limits: Optional[HTTPLimits] = None, observer: Optional[Callable[[HTTPMessage], None]] = None):
         self.src = src
         self.dst = dst
 
@@ -32,6 +32,11 @@ class HTTPConnection:
         self.state = state or HTTPState.CONNECTION_STARTED
         self.version = version
         self.limits = limits or HTTPLimits()
+        self.observer = observer
+
+    def observe(self, message: HTTPMessage):
+        if self.observer is not None:
+            self.observer(message)
 
     async def send(self, value: Union[bytes, HTTPMessage], *, final: bool = True):
         if isinstance(value, bytes):

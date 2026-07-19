@@ -85,6 +85,12 @@ class HTTPHeaderCase(Enum):
 class HTTPHeaders:
     TOKEN = frozenset("!#$%&'*+-.^_`|~") | Characters.DIGIT | Characters.LOWER | Characters.UPPER
 
+    UNTRAILABLE = frozenset({
+        "transfer-encoding", "content-length", "content-encoding", "content-type", "content-range",
+        "host", "cache-control", "expect", "max-forwards", "te", "trailer",
+        "authorization", "proxy-authorization", "set-cookie", "cookie",
+    })
+
     def __init__(self, value: Union[str, bytes, "HTTPHeaders", List, Dict, Tuple] = (), case: Optional[HTTPHeaderCase] = None):
         self.case = case
         self.fields: List[Tuple[str, str]] = []
@@ -159,6 +165,13 @@ class HTTPHeaders:
             raise ValueError(f"{name!r} is not a valid header field name.")
 
         return name
+
+    def trailing(self) -> Optional[str]:
+        return next((name for name, _ in self.fields if name.startswith(":") or name.lower() in HTTPHeaders.UNTRAILABLE), None)
+
+    @staticmethod
+    def spaced(value: str) -> bool:
+        return isinstance(value, str) and value != value.strip(" \t")
 
     @staticmethod
     def clean(name: str, value: str) -> str:
@@ -267,8 +280,10 @@ class HTTPRequest(HTTPMessage):
         if self.headers is None:
             self.headers = HTTPHeaders()
 
-        authority = self.headers.get("Host", "")
-        self.url = URL.from_target(self.target, self.scheme, authority)
+        self.refresh()
+
+    def refresh(self):
+        self.url = URL.from_target(self.target, self.scheme, self.headers.get("Host", ""))
 
     @property
     def scheme(self) -> str:
@@ -276,7 +291,7 @@ class HTTPRequest(HTTPMessage):
 
     @property
     def cookies(self) -> Cookie:
-        return Cookie(self.headers.get("Cookie", ""))
+        return Cookie("; ".join(self.headers.values("Cookie")))
 
     @property
     def is_websocket_upgrade(self) -> bool:

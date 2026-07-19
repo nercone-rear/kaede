@@ -58,8 +58,9 @@ class FileResponse(HTTPResponse):
             self.headers.set("Content-Type", content_type)
 
         elif "Content-Type" not in self.headers:
-            content_type, _ = mimetypes.guess_type(os.fspath(path))
-            self.headers.set("Content-Type", content_type)
+            guessed, _ = mimetypes.guess_type(os.fspath(path))
+
+            self.headers.set("Content-Type", guessed or "application/octet-stream")
 
 class RedirectResponse(HTTPResponse):
     def __init__(self, target: str, *, status_code: int = 307, headers: Optional[HTTPHeaders] = None):
