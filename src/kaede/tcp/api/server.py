@@ -125,8 +125,19 @@ class TCPServer:
 
         loop = asyncio.get_running_loop()
 
-        for host, port in ports:
-            self.servers.append(await loop.create_server(lambda: TCPServerProtocol(self, handler), host, int(port), reuse_port=reuse_port))
+        servers: List[asyncio.AbstractServer] = []
+
+        try:
+            for host, port in ports:
+                servers.append(await loop.create_server(lambda: TCPServerProtocol(self, handler), host, int(port), reuse_port=reuse_port))
+
+        except BaseException:
+            for server in servers:
+                server.close()
+
+            raise
+
+        self.servers = servers
 
         self.sweeper = asyncio.ensure_future(self.watch())
 

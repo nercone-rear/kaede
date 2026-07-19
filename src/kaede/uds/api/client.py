@@ -27,6 +27,7 @@ class UDSClient:
         connection = UDSConnection(UDSAddress(""), dst)
         await connection.connect(self.config.connect_timeout)
 
+        self.connections = [kept for kept in self.connections if not kept.closed]
         self.connections.append(connection)
         return connection
 

@@ -45,6 +45,7 @@ class UDPClient:
                 await connection.close()
                 raise
 
+        self.connections = [kept for kept in self.connections if not kept.closed]
         self.connections.append(connection)
         return connection
 

@@ -78,6 +78,29 @@ class TestServing:
         finally:
             await server.close(timeout=2)
 
+    async def test_a_failed_bind_does_not_leave_earlier_listeners_open(self):
+        # listen() opens one server per port in turn. If a later bind fails, the
+        # listeners already opened for the earlier ports must be closed rather
+        # than left serving, and must not linger in the server's list.
+        import socket
+
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        try:
+            blocker.bind((LOCAL, 0))
+            blocker.listen()
+            taken = TCPPort(blocker.getsockname()[1])
+
+            server = TCPServer()
+
+            with pytest.raises(OSError):
+                await server.listen(TCPHandler(upper), [(LOCAL, TCPPort(0)), (LOCAL, taken)])
+
+            assert server.servers == []
+
+        finally:
+            blocker.close()
+
     async def test_a_synchronous_handler_is_supported(self):
         seen = []
 
