@@ -33,33 +33,33 @@ kaede/
         │   │   ├── __init__.py
         │   │   ├── common.py # UDS 共通　　　　 (UDS      Limits/UDS      Config)
         │   │   ├── client.py # UDS クライアント (UDSClientLimits/UDSClientConfig/UDSClient)
-        │   │   └── server.py # UDS サーバー　　 (UDSServerLimits/UDSServerConfig/UDSServer)
+        │   │   └── server.py # UDS サーバー　　 (UDSServerLimits/UDSServerConfig/UDSServer/UDSHandler)
         │   ├── __init__.py
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス (UDSPort)
-        │   └── protocol.py # プロトコル　 (UDSHandler)
+        │   └── protocol.py # プロトコル　 (UDSConnection/UDSProtocol)
         ├── tcp
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── common.py # TCP 共通　　　　 (TCP      Limits/TCP      Config)
         │   │   ├── client.py # TCP クライアント (TCPClientLimits/TCPClientConfig/TCPClient)
-        │   │   └── server.py # TCP サーバー　　 (TCPServerLimits/TCPServerConfig/TCPServer)
+        │   │   └── server.py # TCP サーバー　　 (TCPServerLimits/TCPServerConfig/TCPServer/TCPHandler)
         │   ├── __init__.py
         │   ├── tls.py      # TCP固有のTLS関連処理
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス (TCPPort)
-        │   └── protocol.py # プロトコル　 (TCPHandler)
+        │   └── protocol.py # プロトコル　 (TCPConnection/TCPProtocol)
         ├── udp
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── common.py # UDP 共通　　　　 (UDP      Limits/UDP      Config)
         │   │   ├── client.py # UDP クライアント (UDPClientLimits/UDPClientConfig/UDPClient)
-        │   │   └── server.py # UDP サーバー　　 (UDPServerLimits/UDPServerConfig/UDPServer)
+        │   │   └── server.py # UDP サーバー　　 (UDPServerLimits/UDPServerConfig/UDPServer/UDPHandler)
         │   ├── __init__.py
         │   ├── tls.py      # UDP固有のDTLS関連処理
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス (UDPPort)
-        │   └── protocol.py # プロトコル　 (UDPHandler)
+        │   └── protocol.py # プロトコル　 (UDPConnection/UDPProtocol)
         ├── mail
         │   ├── helpers
         │   │   ├── __init__.py
@@ -75,10 +75,10 @@ kaede/
         │   │   ├── __init__.py
         │   │   ├── common.py # SMTP 共通　　　　 (SMTP      Limits/SMTP      Config)
         │   │   ├── client.py # SMTP クライアント (SMTPClientLimits/SMTPClientConfig/SMTPClient)
-        │   │   └── server.py # SMTP サーバー　　 (SMTPServerLimits/SMTPServerConfig/SMTPServer)
+        │   │   └── server.py # SMTP サーバー　　 (SMTPServerLimits/SMTPServerConfig/SMTPServer/SMTPHandler)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # SMTP  共通 (SMTPHandler)
+        │   │   ├── common.py # SMTP  共通
         │   │   ├── base.py   # SMTP  基底 (SMTPConnection/SMTPProtocol)
         │   │   └── s1.py     # SMTP1 固有 (S1  Connection/S1  Protocol)
         │   ├── __init__.py
@@ -90,10 +90,10 @@ kaede/
         │   │   ├── __init__.py
         │   │   ├── common.py # IMAP 共通　　　　 (IMAP      Limits/IMAP      Config)
         │   │   ├── client.py # IMAP クライアント (IMAPClientLimits/IMAPClientConfig/IMAPClient)
-        │   │   └── server.py # IMAP サーバー　　 (IMAPServerLimits/IMAPServerConfig/IMAPServer)
+        │   │   └── server.py # IMAP サーバー　　 (IMAPServerLimits/IMAPServerConfig/IMAPServer/IMAPHandler)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # IMAP  共通 (IMAPHandler)
+        │   │   ├── common.py # IMAP  共通
         │   │   ├── base.py   # IMAP  基底 (IMAPConnection/IMAPProtocol)
         │   │   ├── i1.py     # IMAP1 固有 (I1  Connection/I1  Protocol)
         │   │   ├── i2.py     # IMAP2 固有 (I2  Connection/I2  Protocol)
@@ -108,10 +108,10 @@ kaede/
         │   │   ├── __init__.py
         │   │   ├── common.py # POP 共通　　　　 (POP      Limits/POP      Config)
         │   │   ├── client.py # POP クライアント (POPClientLimits/POPClientConfig/POPClient)
-        │   │   └── server.py # POP サーバー　　 (POPServerLimits/POPServerConfig/POPServer)
+        │   │   └── server.py # POP サーバー　　 (POPServerLimits/POPServerConfig/POPServer/POPHandler)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # POP  共通 (POPHandler)
+        │   │   ├── common.py # POP  共通
         │   │   ├── base.py   # POP  基底 (POPConnection/POPProtocol)
         │   │   ├── p1.py     # POP1 固有 (P1 Connection/P1 Protocol)
         │   │   ├── p2.py     # POP2 固有 (P2 Connection/P2 Protocol)
@@ -125,10 +125,10 @@ kaede/
         │   │   ├── __init__.py
         │   │   ├── common.py # QUIC 共通　　　　 (QUIC      Limits/QUIC      Config)
         │   │   ├── client.py # QUIC クライアント (QUICClientLimits/QUICClientConfig/QUICClient)
-        │   │   └── server.py # QUIC サーバー　　 (QUICServerLimits/QUICServerConfig/QUICServer)
+        │   │   └── server.py # QUIC サーバー　　 (QUICServerLimits/QUICServerConfig/QUICServer/QUICHandler)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # QUIC   共通 (QUICHandler)
+        │   │   ├── common.py # QUIC   共通
         │   │   ├── base.py   # QUIC   基底 (QUICConnection/QUICProtocol)
         │   │   ├── q1.py     # QUICv1 固有 (Q1  Connection/Q1  Protocol)
         │   │   └── q2.py     # QUICv2 固有 (Q2  Connection/Q2  Protocol)
@@ -141,7 +141,7 @@ kaede/
         │   │   ├── __init__.py
         │   │   ├── common.py # HTTP 共通　　　　 (HTTP      Limits/HTTP      Config)
         │   │   ├── client.py # HTTP クライアント (HTTPClientLimits/HTTPClientConfig/HTTPClient)
-        │   │   └── server.py # HTTP サーバー　　 (HTTPServerLimits/HTTPServerConfig/HTTPServer)
+        │   │   └── server.py # HTTP サーバー　　 (HTTPServerLimits/HTTPServerConfig/HTTPServer/HTTPHandler)
         │   ├── helpers
         │   │   ├── __init__.py
         │   │   ├── dns.py         # DNS   関連処理 (HTTPSレコード等)
@@ -152,7 +152,7 @@ kaede/
         │   ├── protocol
         │   │   ├── __init__.py
         │   │   ├── handler.py # UDS/TCP/QUIC 接続ハンドラ (HTTPUDSHandler/HTTPTCPHandler/HTTPQUICHandler)
-        │   │   ├── common.py  # HTTP         共通　　　　 (HTTPHandler)
+        │   │   ├── common.py  # HTTP         共通
         │   │   ├── base.py    # HTTP         基底　　　　 (HTTPConnection/HTTPProtocol)
         │   │   ├── h1.py      # HTTP/1.x     固有　　　　 (H1  Connection/H1  Protocol)
         │   │   ├── h2.py      # HTTP/2.x     固有　　　　 (H2  Connection/H2  Protocol)
@@ -169,14 +169,14 @@ kaede/
             │   ├── __init__.py
             │   ├── common.py # DNS 共通　　　　 (DNS      Limits/DNS      Config)
             │   ├── client.py # DNS クライアント (DNSClientLimits/DNSClientConfig/DNSClient)
-            │   └── server.py # DNS サーバー　　 (DNSServerLimits/DNSServerConfig/DNSServer)
+            │   └── server.py # DNS サーバー　　 (DNSServerLimits/DNSServerConfig/DNSServer/DNSHandler)
             ├── helpers
             │   ├── __init__.py
             │   └── dnssec.py # DNSSEC 関連処理
             ├── protocol
             │   ├── __init__.py
             │   ├── handler.py # TCP/UDP/TLS/QUIC/HTTPS 接続ハンドラ (DNSTCPHandler/DNSUDPHandler/DNSTLSHandler/DNSQUICHandler/DNSHTTPSHandler)
-            │   ├── common.py  # DNS                    共通 (DNSHandler)
+            │   ├── common.py  # DNS
             │   ├── base.py    # DNS                    基底 (DNS     Connection/DNS     Protocol)
             │   ├── tcp.py     # DNS over TCP           固有 (DNSTCP  Connection/DNSTCP  Protocol)
             │   ├── udp.py     # DNS over UDP           固有 (DNSUDP  Connection/DNSUDP  Protocol)
@@ -201,8 +201,19 @@ Kaedeのソースコードのスタイルは、各言語の標準的なスタイ
     - Kaedeにおいて維持すべき重要な特性は、実用的に使用可能なレベルに達していること、誰もがどのプロトコルも簡単かつ直感的に使用できること、そしてバージョン・プロトコル・役割などのカウンターパート間の差異が最小限、あるいは一切存在しないことです。
     - 例として、バージョン間の互換性は基底クラスを作成し(`class H1Connection(HTTPConnection)`のように)継承させることで保証しやすくなります。また、そのクラスを使用する側は可能な限り(`H1Connection`のような)バージョン固有のクラスではなく(`HTTPConnection`のような)基底クラスを参照するようにするといいでしょう。
 - 高レイヤーのプロトコルは、低レイヤーのプロトコルを扱う際、ライブラリの利用者と全く同じ方法で扱ってください。
-    - 例えばHTTPがTCPプロトコルでの通信を受けて処理するためには、TCPServer/HTTPTCPHandler(TCPHandler)/TCPServerConfig/TCPServerLimitsを使用します。
+    - 例えばHTTPがTCPプロトコルでの通信を受けて処理するためには、`TCPServer`/`HTTPTCPHandler(TCPHandler)`/`TCPServerConfig`/`TCPServerLimits`を使用します。
 - ...など。これらに限定されません。作業中に何らかの特徴を発見した際は、それに従ってください。
+
+### 型/クラス名について
+- `XXXVersion`はXXXプロトコルのバージョンを表すための型です。
+- `XXXPort`はXXXプロトコルのポート番号を表すための型です。TCPやUDPのような独自のポートを持つプロトコル、またはDNSやHTTPのような複数のプロトコル上で動作するプロトコルに存在します。
+- `XXXLimits`はXXXプロトコルの処理中に適用する制限(同時接続数、レート制限、サイズ上限 など)を管理するためのインスタンスです。
+- `XXXConfig`はXXXプロトコルの処理中に適用する設定(有効なバージョンの一覧 など)を管理するためのインスタンスです。
+- `XXXClient`はXXXプロトコルのクライアント(通信開始)側の高水準APIです。
+- `XXXServer`はXXXプロトコルのサーバー(通信処理/応答)側の高水準APIです。
+- `XXXHandler`はXXXプロトコルのサーバーが通信を処理する際に実行するコールバック関数をまとめたクラスです。
+- `XXXProtocol`はXXXプロトコルにおいて1接続に対して作成されるインスタンスです。1つ下の層(QUICの場合はUDP)の1接続に対して作成されます。UDS/TCP/UDPのような標準ライブラリ上に実装されているプロトコルでは、`asyncio.Protocol`または`asyncio.DatagramProtocol`を継承するクラスとして存在します。
+- `XXXConnection`はXXXプロトコルにおいて1接続に対して作成されるインスタンスです。QUICなどの擬似的な接続を採用しているプロトコルの場合、その擬似的な接続に対して作成されます。
 
 ## 自動テスト
 自動テストにはpytestを使用します。最小限のテストは自動テストでカバーできますが、あくまで補助的なものであり、可能な限り手動テストを優先してください。
