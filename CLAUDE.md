@@ -1,12 +1,12 @@
 # CLAUDE.md
-This file provides information that Claude Code needs to know when handling the source code of Kaede.
+このファイルは、Kaedeのソースコードを扱う際にClaudeが把握しておくべき情報を提供するものです。
 
-## Overview
-Kaede is a Python library for processing commonly used protocols. (e.g. TCP, UDP, QUIC, TLS, HTTP)
+## 概要
+Kaedeは、一般的に使用されるプロトコル(TCP、UDP、QUIC、HTTPなど)を処理するためのPythonライブラリです。
 
-Please read README.md for details.
+詳細はREADME.mdを参照してください。
 
-## Directory Structure
+## ディレクトリ構造
 ```
 kaede/
 ├── pyproject.toml # プロジェクト設定
@@ -24,14 +24,14 @@ kaede/
         │   │   ├── __init__.py
         │   │   └── ech.py # ECH (Encrypted Client Hello) 関連処理
         │   ├── __init__.py
-        │   ├── models.py  # 抽象化クラス
         │   ├── errors.py  # 例外クラス
+        │   ├── models.py  # 抽象化クラス
         │   └── openssl.py # OpenSSL (ctypes)
         ├── uds
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── client.py # UDSクライアント (高水準API)
-        │   │   └── server.py # UDSサーバー    (高水準API)
+        │   │   └── server.py # UDSサーバー　　 (高水準API)
         │   ├── __init__.py
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス
@@ -40,7 +40,7 @@ kaede/
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── client.py # TCPクライアント (高水準API)
-        │   │   └── server.py # TCPサーバー    (高水準API)
+        │   │   └── server.py # TCPサーバー　　 (高水準API)
         │   ├── __init__.py
         │   ├── tls.py      # TCP固有のTLS関連処理
         │   ├── errors.py   # 例外クラス
@@ -50,17 +50,13 @@ kaede/
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── client.py # UDPクライアント (高水準API)
-        │   │   └── server.py # UDPサーバー    (高水準API)
+        │   │   └── server.py # UDPサーバー　　 (高水準API)
         │   ├── __init__.py
         │   ├── tls.py      # UDP固有のDTLS関連処理
         │   ├── errors.py   # 例外クラス
         │   ├── models.py   # 抽象化クラス
         │   └── protocol.py # プロトコル
         ├── mail
-        │   ├── api
-        │   │   ├── __init__.py
-        │   │   ├── client.py # メールクライアント (高水準API)
-        │   │   └── server.py # メールサーバー    (高水準API)
         │   ├── helpers
         │   │   ├── __init__.py
         │   │   ├── dns.py   # DNS   関連処理 (MXレコード等)
@@ -69,54 +65,74 @@ kaede/
         │   │   └── dmarc.py # DMARC 関連処理
         │   ├── __init__.py
         │   ├── errors.py   # 例外クラス
-        │   ├── models.py   # 抽象化クラス
-        │   ├── parser.py   # パーサー
-        │   └── protocol.py # プロトコル
+        │   └── models.py   # 抽象化クラス
         ├── smtp
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── client.py # SMTPクライアント (高水準API)
-        │   │   └── server.py # SMTPサーバー    (高水準API)
+        │   │   └── server.py # SMTPサーバー　　 (高水準API)
+        │   ├── protocol
+        │   │   ├── __init__.py
+        │   │   ├── common.py # SMTP  共通
+        │   │   ├── base.py   # SMTP  基底 (SMTPHandler/SMTPConnection/SMTPProtocol)
+        │   │   └── s1.py     # SMTP1 固有 (S1  Handler/S1  Connection/S1  Protocol)
         │   ├── __init__.py
         │   ├── tls.py      # SMTP固有のTLS関連処理 (SMTPS関連処理)
         │   ├── errors.py   # 例外クラス
-        │   ├── models.py   # 抽象化クラス
-        │   └── protocol.py # プロトコル
+        │   └── models.py   # 抽象化クラス
         ├── imap
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── client.py # IMAPクライアント (高水準API)
-        │   │   └── server.py # IMAPサーバー    (高水準API)
+        │   │   └── server.py # IMAPサーバー　　 (高水準API)
+        │   ├── protocol
+        │   │   ├── __init__.py
+        │   │   ├── common.py # IMAP  共通
+        │   │   ├── base.py   # IMAP  基底 (IMAPHandler/IMAPConnection/IMAPProtocol)
+        │   │   ├── i1.py     # IMAP1 固有 (I1  Handler/I1  Connection/I1  Protocol)
+        │   │   ├── i2.py     # IMAP2 固有 (I2  Handler/I2  Connection/I2  Protocol)
+        │   │   ├── i3.py     # IMAP3 固有 (I3  Handler/I3  Connection/I3  Protocol)
+        │   │   └── i4.py     # IMAP4 固有 (I4  Handler/I4  Connection/I4  Protocol)
         │   ├── __init__.py
         │   ├── tls.py      # IMAP固有のTLS関連処理 (IMAPS関連処理)
         │   ├── errors.py   # 例外クラス
-        │   ├── models.py   # 抽象化クラス
-        │   └── protocol.py # プロトコル
-        ├── pop3
+        │   └── models.py   # 抽象化クラス
+        ├── pop
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # POP3クライアント (高水準API)
-        │   │   └── server.py # POP3サーバー    (高水準API)
+        │   │   ├── client.py # POPクライアント (高水準API)
+        │   │   └── server.py # POPサーバー　　 (高水準API)
+        │   ├── protocol
+        │   │   ├── __init__.py
+        │   │   ├── common.py # POP  共通
+        │   │   ├── base.py   # POP  基底 (POPHandler/POPConnection/POPProtocol)
+        │   │   ├── p1.py     # POP1 固有 (P1 Handler/P1 Connection/P1 Protocol)
+        │   │   ├── p2.py     # POP2 固有 (P2 Handler/P2 Connection/P2 Protocol)
+        │   │   └── p3.py     # POP3 固有 (P3 Handler/P3 Connection/P3 Protocol)
         │   ├── __init__.py
-        │   ├── tls.py      # POP3固有のTLS関連処理 (POP3S関連処理)
+        │   ├── tls.py      # POP固有のTLS関連処理 (POP3S関連処理)
         │   ├── errors.py   # 例外クラス
-        │   ├── models.py   # 抽象化クラス
-        │   └── protocol.py # プロトコル
+        │   └── models.py   # 抽象化クラス
         ├── quic
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── client.py # QUICクライアント (高水準API)
-        │   │   └── server.py # QUICサーバー    (高水準API)
+        │   │   └── server.py # QUICサーバー　　 (高水準API)
+        │   ├── protocol
+        │   │   ├── __init__.py
+        │   │   ├── common.py # QUIC   共通
+        │   │   ├── base.py   # QUIC   基底 (QUICHandler/QUICConnection/QUICProtocol)
+        │   │   ├── q1.py     # QUICv1 固有 (Q1  Handler/Q1  Connection/Q1  Protocol)
+        │   │   └── q2.py     # QUICv2 固有 (Q2  Handler/Q2  Connection/Q2  Protocol)
         │   ├── __init__.py
         │   ├── tls.py      # QUIC固有のTLS関連処理
         │   ├── errors.py   # 例外クラス
-        │   ├── models.py   # 抽象化クラス
-        │   └── protocol.py # プロトコル
+        │   └── models.py   # 抽象化クラス
         ├── http
         │   ├── api
         │   │   ├── __init__.py
         │   │   ├── client.py # HTTPクライアント (高水準API)
-        │   │   └── server.py # HTTPサーバー    (高水準API)
+        │   │   └── server.py # HTTPサーバー　　 (高水準API)
         │   ├── helpers
         │   │   ├── __init__.py
         │   │   ├── dns.py         # DNS   関連処理 (HTTPSレコード等)
@@ -126,11 +142,11 @@ kaede/
         │   │   └── compression.py # メッセージボディ圧縮
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── handler.py    # UDS/TCP/QUIC 接続ハンドラ
-        │   │   ├── connection.py # HTTP         接続抽象化クラス (1/2/3 共通)
-        │   │   ├── h1.py         # HTTP/1.x     接続抽象化クラス
-        │   │   ├── h2.py         # HTTP/2.x     接続抽象化クラス
-        │   │   └── h3.py         # HTTP/3.x     接続抽象化クラス
+        │   │   ├── common.py # HTTP     共通
+        │   │   ├── base.py   # HTTP     基底 (HTTPHandler/HTTPConnection/HTTPProtocol)
+        │   │   ├── h1.py     # HTTP/1.x 固有 (H1  Handler/H1  Connection/H1  Protocol)
+        │   │   ├── h2.py     # HTTP/2.x 固有 (H2  Handler/H2  Connection/H2  Protocol)
+        │   │   └── h3.py     # HTTP/3.x 固有 (H3  Handler/H3  Connection/H3  Protocol)
         │   ├── __init__.py
         │   ├── errors.py    # 例外クラス
         │   ├── models.py    # 抽象化クラス
@@ -142,102 +158,109 @@ kaede/
             ├── api
             │   ├── __init__.py
             │   ├── client.py # DNSクライアント (高水準API)
-            │   └── server.py # DNSサーバー    (高水準API)
+            │   └── server.py # DNSサーバー　　 (高水準API)
             ├── helpers
             │   ├── __init__.py
             │   └── dnssec.py # DNSSEC 関連処理
             ├── protocol
             │   ├── __init__.py
-            │   ├── tcp.py     # DNS over TCP   固有処理
-            │   ├── udp.py     # DNS over UDP   固有処理
-            │   ├── tls.py     # DNS over TLS   固有処理
-            │   ├── quic.py    # DNS over QUIC  固有処理
-            │   ├── https.py   # DNS over HTTPS 固有処理
-            │   └── handler.py # TCP/UDP/HTTP   接続ハンドラ
+            │   ├── common.py # DNS            共通
+            │   ├── base.py   # DNS            基底 (DNS     Handler/DNS     Connection/DNS     Protocol)
+            │   ├── tcp.py    # DNS over TCP   固有 (DNSTCP  Handler/DNSTCP  Connection/DNSTCP  Protocol)
+            │   ├── udp.py    # DNS over UDP   固有 (DNSUDP  Handler/DNSUDP  Connection/DNSUDP  Protocol)
+            │   ├── tls.py    # DNS over TLS   固有 (DNSTLS  Handler/DNSTLS  Connection/DNSTLS  Protocol)
+            │   ├── quic.py   # DNS over QUIC  固有 (DNSQUIC Handler/DNSQUIC Connection/DNSQUIC Protocol)
+            │   └── https.py  # DNS over HTTPS 固有 (DNSHTTPSHandler/DNSHTTPSConnection/DNSHTTPSProtocol)
             ├── __init__.py
             ├── errors.py  # 例外クラス
             ├── models.py  # レコード種別/レコードクラス/レコードデータ/レコード/レコード一覧 クラス
             └── records.py # レコード種類別のレコードデータクラス
 ```
 
-## Code Style
-The Kaede source code style differs in some ways from the standard style of its respective languages. Please maintain the existing code structure and style.
+## コードスタイル
+Kaedeのソースコードスタイルは、各言語の標準的なスタイルといくつかの点で異なります。既存のコード構造とスタイルを維持してください。
 
-In Python:
-- Private objects (constants, variables, functions, etc.) do not exist (there are no objects starting with "_").
-- Do not create objects (constants, variables, functions, classes, etc.) intended only for internal processing. Every object must be designed with the assumption that a user of the library may directly use it.
-- Direct placement of objects (constants, variables, functions, etc.) in files is discouraged (simple processes or processes that are not particularly long should be placed as methods within the target class. For example, a helper function that only determines whether an HTTP message status code is a server-side error should be placed in the HTTPMessage class, while excessively long functions should be placed in locations like `helpers.py` or `helpers/*.py`).
-- Use object (constant, variable, function, etc.) names that are simple but whose functionality and behavior can be inferred from the name (e.g., instead of hoge, fuga, aaaa, untitled, or cleanup_stale_socket, use cleanup, free, or drain).
-- Classify what Kaede's protocols handle — not only the data/content being processed (e.g. DNSRecord for DNS records, HTTPMessage for HTTP messages), but also the entities that carry or act on it, such as per-version connection classes (e.g. H1Connection, H2Connection, H3Connection) and bindings (e.g. OpenSSL bindings). Use classes or data classes instead of redundant arguments to make these easier to handle. This does not mean classifying aggressively wherever possible — apply it to the data/content being processed and the entities that carry or act on it, not to every piece of logic.
-- Keep the code symmetrical between all counterparts, not only between protocols and versions. Counterparts include protocols (TCP and UDP must both be usable in the same way; TCP-TLS, UDP-DTLS, and QUIC must all be usable in the same way), versions (the implementations of HTTP/1.x, HTTP/2, and HTTP/3 must be symmetrical), roles (the server and the client of each protocol must be symmetrical), directions (requests and responses must be handled, parsed, built, and validated in the same way), and any other pair or group that plays a corresponding role (e.g. encode/decode, send/receive, open/close, query/reply).
-    - The important characteristics of Kaede that must be maintained are that it has reached a practically usable level, that anyone can use any protocol easily and intuitively, and that the differences between counterparts such as versions, protocols, roles, and directions are minimal or nonexistent.
-- ...and so on. There are other conventions as well. If you discover any characteristics while working, please follow those patterns.
+例えば、Pythonでは:
+- プライベートなオブジェクト(定数、変数、関数、クラスなど)は存在しません。(Pythonの仕様上`_`から始める必要がなく、つまり`__str__`や`os._exit()`などでない場合、先頭が`_`で始まるオブジェクトは存在するべきではありません)
+- 内部処理のためだけに使用することを意図したオブジェクトを作成しないでください。すべてのオブジェクトは、ライブラリの利用者が直接使用する可能性があることを前提に設計する必要があります。
+- 特定のクラスに対して作用する関数は、その関数が過度に長い場合を除いて、クラス内にメソッドとして配置してください。
+- 関数や定数は、Enumやデータクラスの場合、またはPythonの仕様上クラス上に配置する必要があるもの(`_fields_`など)、または利便性のための最低限のクラス内定数(`OpenSSL.minimum_version`のように)を除いて、そのクラスが配置されているファイルに直接、インポート直後または対象クラス周辺に配置してください。
+- オブジェクト名はシンプルかつ役割や振る舞いを正確に理解できる必要があります。(例: `Server.cleanup_stale_socket()`ではなく`HTTPServer.cleanup()`)
+- あらゆる対応関係でコードの対称性を保ってください。これはプロトコル(TCP/UDP/QUIC、IMAP/POP3)、バージョン(HTTP/1.x/2.x/3.x)、役割(クライアント/サーバー)、方向性(リクエスト/レスポンス)、およびその他の対応する役割を果たすペアやグループ(例: エンコード/デコード、送信/受信、オープン/クローズ、クエリ/リプライ)が該当します。対称性にはオブジェクトの配置、役割、動作などが含まれ、例えば同じ種類のプロトコル同士であれば(そのプロトコル自身の特徴に関する箇所を除いて)完全なドロップイン互換を保証する必要があります。
+    - Kaedeにおいて維持すべき重要な特性は、実用的に使用可能なレベルに達していること、誰もがどのプロトコルも簡単かつ直感的に使用できること、そしてバージョン・プロトコル・役割などのカウンターパート間の差異が最小限、あるいは一切存在しないことです。
+    - 例として、バージョン間の互換性は基底クラスを作成し(`class H1Connection(HTTPConnection)`のように)継承させることで保証しやすくなります。また、そのクラスを使用する側は可能な限り(`H1Connection`のような)バージョン固有のクラスではなく(`HTTPConnection`のような)基底クラスを参照するようにするといいでしょう。
+- ...その他にも様々な慣例があります。作業中に何らかの特性を発見した場合は、そのパターンに従ってください。
 
-## Automated Testing
-pytest is used for automated testing. While minimal tests can be covered by automated tests, they are not perfect, so prioritize manual testing as much as possible.
+## 自動テスト
+自動テストにはpytestを使用します。最小限のテストは自動テストでカバーできますが、あくまで補助的なものであり、可能な限り手動テストを優先してください。
 
-When using automated tests or updating test content, observe the following:
+テスト内容を更新する場合は、以下を遵守してください:
 
-- Use automated tests only to easily verify that all existing features in Kaede function correctly and are in full compliance with specifications such as RFCs.
-- The content of automated tests must always verify whether it is in full compliance with the strict protocol specifications, regardless of Kaede's current behavior.
-    - If you assume Kaede's current behavior, the automated tests may pass even when there is an error in the implementation, preventing early detection.
-    - If automated tests are based on current behavior, they effectively become tests for verifying consistency with the status quo, which defeats their original purpose.
-    - If an implementation error is discovered and fixed, tests will not pass if they were based on the previous behavior, even if the fix itself is correct. This increases the effort required to update test content and undermines reliability.
-    - For the reasons mentioned above, when updating test content, do not trust Kaede's source code or behavior at all; ensure the content complies with actual protocol specifications. You should follow this for safety and quality, even if you wrote the code yourself and are confident in its compliance.
+- 自動テストは、Kaedeの既存機能がすべて正しく動作し、RFCなどの仕様に完全に準拠していることを容易に検証するためだけに使用してください。現状のKaedeの構造に可能な限り依存しないようにしてください。
+- 自動テストの内容は、Kaedeの現在の挙動にかかわらず、常に厳格なプロトコル仕様への完全な準拠を検証するものでなければなりません。
+    - Kaedeの現在の挙動を前提とすると、実装に誤りがあっても自動テストが通ってしまう可能性があり、早期発見を妨げます。
+    - 自動テストが現在の挙動を前提としている場合、それは事実上、現状維持との整合性を検証するテストとなってしまい、本来の目的を損ないます。
+    - 実装の誤りが発見され修正された場合、修正自体が正しくても、以前の挙動を前提としたテストは通らなくなります。これによりテスト内容の更新にかかる労力が増え、信頼性が損なわれます。
+    - 上記の理由から、テスト内容を更新する際は、Kaedeのソースコードや挙動を一切信頼せず、内容が実際のプロトコル仕様に準拠していることを確認してください。たとえ自分がそのコードを書き、準拠していると確信していたとしても、安全性と品質のためにこれを遵守すべきです。
+- 自動テストの内容は、MUST違反のような重大なものに限定せず、プロトコルの完全な仕様を含んでいる必要があります。
 
-## Testing by Claude
-When performing manual testing, follow these steps:
+## Claudeによるテスト
+手動テストを実施する際は、以下の手順に従ってください:
 
-1. First, discover as many bugs or vulnerabilities as possible. Use various creative methods such as reading all the code, carefully examining each part of the code, executing the server, or testing in different environments like Docker. Focus only on finding as many issues as possible without confirming whether they are actually problems.
-2. Next, create a detailed list of the issues discovered in step 1.
-3. Finally, verify whether those issues are truly problems. Use various methods such as reading related code, thinking through the actual execution flow line by line, verifying in a real environment, or checking the actual specifications of related libraries on the internet.
+1. まず、可能な限り多くのバグや脆弱性を発見してください。すべてのコードを読む、各部分を注意深く精査する、サーバーを実行する、Dockerなど異なる環境でテストするなど、様々な方法を使用してください。この段階では、それが実際に問題かどうかを確認せず、問題をできるだけ多く発見することだけに専念してください。
+2. 次に、手順1で発見した問題の詳細なリストを作成してください。リストには発見した経緯や追加した理由などを含めてください。
+3. 最後に、それらの問題が本当に問題であるかを検証してください。関連コードを読む、実際の実行フローを一行ずつ考える、実環境で検証する、インターネットで関連ライブラリの実際の仕様を確認するなど、様々な方法を使用して慎重に行なってください。
 
-### Note
-This procedure incorporates the following approaches. Please keep these in mind when updating this procedure:
-- Dividing into multiple steps helps focus on each stage, enabling more reliable testing.
-- Step 2 is performed before verifying issues, which helps in better understanding through documentation, making the verification and correction of issues easier and more reliable.
+### 注記
+この手順には以下の知見が組み込まれています。この手順を更新する際は、これらを念頭に置いてください:
+- 複数の手順に分けることで各手順に集中しやすくなり、より確実なテストが可能になります。
+- 手順2を問題の検証前に実施することで、ドキュメント化を通じた理解が深まり、問題の検証・修正がより容易かつ確実になります。
 
-## Fixing by Claude
-When fixing issues, follow these steps:
+## Claudeによる修正
+問題を修正する際は、以下の手順に従ってください:
 
-1. First, verify whether the issue is actually a problem. Use various methods such as reading related code, thinking through the actual execution flow line by line, verifying in a real environment, or checking the actual specifications of related libraries on the internet. Even if a pre-check was performed as in step 3 of "Testing by Claude," you must perform this again.
-2. Next, gather the information necessary for the fix. As in step 1, read the actual code and conduct research on the internet.
-3. Finally, fix the issue in compliance with the rules for code changes in the "Changes by Claude" section.
+1. まず、その問題が実際に問題であるかを検証してください。関連コードを読む、実際の実行フローを一行ずつ考える、実環境で検証する、インターネットで関連ライブラリの実際の仕様を確認するなど、様々な方法を使用してください。「Claudeによるテスト」の手順3のような事前確認を行っていたとしても、これを再度実施する必要があります。
+2. 次に、修正に必要な情報を収集してください。手順1と同様に、実際のコードを読み、インターネットで調査を行ってください。
+3. 最後に、「Claudeによる変更」セクションのコード変更ルールに準拠して問題を修正してください。
 
-## Changes by Claude
-When making changes to code or content, observe the following:
+## Claudeによる変更
+コードや内容を変更する際は、以下を遵守してください:
 
-- Maintain the structure and style of existing code, and use simple and reliable methods to implement features or fix issues with highly readable code.
-- Strive to ensure that each feature or module does not contain code specific to other features, modules, or common areas. If there is absolutely no way other than adding it, keep the added code to a minimum.
-- Carefully consider implementation methods. In particular, pay close attention to safety and reliability.
-- It must be possible for humans to understand the changes completely and without misunderstanding. Provide detailed work logs in a prominent form at a medium frequency during work.
-- When implementing new features, add as many high-quality and detailed tests as possible to the automated tests. When adding, strictly observe the rules for expanding test items.
-- Always run tests after completing work. Execute automated tests with pytest or the steps in the "Testing by Claude" section. It is strongly recommended to perform manual testing compliant with the "Testing by Claude" section in addition to automated tests.
+- 既存コードの構造とスタイルを維持し、可読性の高いコードで、シンプルかつ確実な方法により機能の実装や問題の修正を行ってください。
+- 各機能やモジュールに、他の機能・モジュール・共通部分に固有のコードが含まれないよう努めてください。追加する以外に方法が全くない場合は、追加するコードを最小限に留めてください。
+- 実装方法を慎重に検討してください。特に、安全性と信頼性に細心の注意を払ってください。
+- 人間が変更内容を誤解なく完全に理解できるようにしてください。作業中は目立つ形で、中程度の頻度で詳細な作業ログを提供してください。
+- 大きな変更を行なった際は、できるだけ多くの高品質かつ詳細なテストを自動テストに追加してください。追加する際は、テスト項目更新のルールを厳格に遵守してください。
+- 作業完了後は必ずテストを実行してください。pytestによる自動テスト、または「Claudeによるテスト」セクションの手順を実行してください。自動テストに加え、「Claudeによるテスト」セクションに準拠した手動テストの実施を強く推奨します。
 
-When approved by human review and a human requests the creation of a commit, you may create a commit after observing the following:
+## Claudeによるコミット
+人間によるレビューで承認を受け、人間からコミット作成の依頼があった場合、以下を遵守した上でコミットを作成できます:
 
-- Before actually creating the commit, summarize the commit message and the changes to be included (i.e., staged with git add) in detail, inform the human, and create the commit once approved.
-- Write the commit message in Japanese or English.
-- The first line of the commit message should allow for easy understanding of the commit content even without knowing the details in the following lines.
-- Summarize more detailed changes from the second/third line onwards.
-- Add the "Claude: " prefix to the first line of the commit message.
-- Include a trailer in the format "Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL 0] [TOOL 1]" in the commit.
-    - Use names like "Claude", "ChatGPT", or "Gemini" for AGENT_NAME.
-    - Use text like "claude-sonnet-4.6" for MODEL_VERSION.
-    - For [TOOL 0] [TOOL 1], list the names of the tools used to analyze the code, separated by spaces.
-        - You do not need to list basic daily system tools like file editing, web search/browsing, git, uv, or clang.
+- 実際にコミットを作成する前に、コミットメッセージと含める変更内容(すなわちgit addでステージングされるもの)を詳細に説明し、承認を得てからコミットを作成してください。
+- コミットメッセージは日本語または英語で記述してください。
+- コミットメッセージの1行目は、詳細を知らなくてもコミット内容が容易に理解できるものにしてください。
+- 2行目/3行目以降でより詳細な変更内容を要約してください。
+- コミットメッセージの1行目に「Claude: 」「ChatGPT: 」「Gemini: 」のようなプレフィックスを付けてください。
+- コミットに「Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL 0] [TOOL 1]」形式のトレーラーを含めてください。
+    - AGENT_NAMEには「Claude」「ChatGPT」「Gemini」のような名前を使用してください。
+    - MODEL_VERSIONには「claude-sonnet-4.6」のようなテキストを使用してください。
+    - [TOOL 0] [TOOL 1]には、コード分析に使用したツールの名前をスペース区切りで列挙してください。
+        - ファイル編集、Web検索/ブラウジング、git、uv、clangといった基本的な日常的システムツールは列挙する必要はありません。
 
-## Troubleshooting / Helpful Information
+## トラブルシューティング / 参考情報
 
-### If the appropriate version of OpenSSL is not installed
+### 適切なバージョンのOpenSSLがインストールされていない場合
 
-Kaede has strict OpenSSL requirements that are not met even by the latest versions provided by most Linux distributions.
+Kaedeは、ほとんどのLinuxディストリビューションが提供する最新版でも満たされないほど厳格なOpenSSLの要件を持っています。
+(この記述の更新時点では、3.6+または4.0+が必要とされています)
 
-This includes Claude's sandbox environment. Unless you are running Claude Code locally, Claude can only work within a sandbox. Since only older versions of OpenSSL are available in the sandbox, just like in a standard Linux environment, you must build from source or obtain pre-built binaries.
+これはClaudeのサンドボックス環境も例外ではありません。Claude Codeをローカルで実行している場合を除き、Claudeはサンドボックス内でのみ作業できます。
+標準的なLinux環境と同様、サンドボックス内では古いバージョンのOpenSSLしか利用できないため、ソースからビルドするか、ビルド済みバイナリを取得する必要があります。
 
-Fortunately, I have created a GitHub repository to pre-build OpenSSL for Kaede development. You can obtain builds for each OpenSSL version, platform, and architecture from [nercone-rear/openssl](https://github.com/nercone-rear/openssl/releases/). These are the same binaries used in CI.
+幸い、開発のために、GitHub Actionsを利用してOpenSSLを定期的にビルドするGitHubリポジトリを用意しています。
+[nercone-rear/openssl](https://github.com/nercone-rear/openssl/releases/)から、各OpenSSLバージョン・プラットフォーム・アーキテクチャ向けのビルドを取得できます。これらはCIで使用されているものと同一のバイナリです。注意点として、実行時にOPENSSLCONF環境変数を設定する必要があることに注意してください。
 
-If a suitable version of OpenSSL is not installed, please obtain the binaries from nercone-rear/openssl.
-Note that you will need to execute add_repo to fetch from external repositories like nercone-rear/openssl. In most cases, users will approve this.
+適切なバージョンのOpenSSLがインストールされていない場合は、nercone-rear/opensslからバイナリを取得し使用してください。
+各リリースにはSHA256SUMS/SHA384SUMS/SHA512SUMSファイルが含まれているため、ダウンロード後は必ず検証してください。
 
-Each release includes SHA256SUMS/SHA384SUMS/SHA512SUMS files, so please be sure to verify them after downloading.
+サンドボックス上で(nercone-rear/opensslのような)外部リポジトリからコンテンツを取得する場合、`add_repo`を実行する必要があるかもしれません。ほとんどの場合、ユーザーはこれを承認します。
