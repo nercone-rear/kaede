@@ -18,6 +18,7 @@ kaede/
         ├── __init__.py
         ├── ip.py        # IP関連の抽象化クラス
         ├── url.py       # URL
+        ├── models.py    # 抽象化クラス (Limits/ServerLimits)
         ├── constants.py # 定数 (共通)
         ├── tls
         │   ├── helpers
@@ -25,37 +26,40 @@ kaede/
         │   │   └── ech.py # ECH (Encrypted Client Hello) 関連処理
         │   ├── __init__.py
         │   ├── errors.py  # 例外クラス
-        │   ├── models.py  # 抽象化クラス
+        │   ├── models.py  # 抽象化クラス (TLSVersion/TLSState/TLSGroup/TLSCipher/TLSConfig)
         │   └── openssl.py # OpenSSL (ctypes)
         ├── uds
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # UDSクライアント (高水準API)
-        │   │   └── server.py # UDSサーバー　　 (高水準API)
+        │   │   ├── common.py # UDS 共通　　　　 (UDS      Limits/UDS      Config)
+        │   │   ├── client.py # UDS クライアント (UDSClientLimits/UDSClientConfig/UDSClient)
+        │   │   └── server.py # UDS サーバー　　 (UDSServerLimits/UDSServerConfig/UDSServer)
         │   ├── __init__.py
         │   ├── errors.py   # 例外クラス
-        │   ├── models.py   # 抽象化クラス
-        │   └── protocol.py # プロトコル
+        │   ├── models.py   # 抽象化クラス (UDSPort)
+        │   └── protocol.py # プロトコル　 (UDSHandler)
         ├── tcp
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # TCPクライアント (高水準API)
-        │   │   └── server.py # TCPサーバー　　 (高水準API)
+        │   │   ├── common.py # TCP 共通　　　　 (TCP      Limits/TCP      Config)
+        │   │   ├── client.py # TCP クライアント (TCPClientLimits/TCPClientConfig/TCPClient)
+        │   │   └── server.py # TCP サーバー　　 (TCPServerLimits/TCPServerConfig/TCPServer)
         │   ├── __init__.py
         │   ├── tls.py      # TCP固有のTLS関連処理
         │   ├── errors.py   # 例外クラス
-        │   ├── models.py   # 抽象化クラス
-        │   └── protocol.py # プロトコル
+        │   ├── models.py   # 抽象化クラス (TCPPort)
+        │   └── protocol.py # プロトコル　 (TCPHandler)
         ├── udp
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # UDPクライアント (高水準API)
-        │   │   └── server.py # UDPサーバー　　 (高水準API)
+        │   │   ├── common.py # UDP 共通　　　　 (UDP      Limits/UDP      Config)
+        │   │   ├── client.py # UDP クライアント (UDPClientLimits/UDPClientConfig/UDPClient)
+        │   │   └── server.py # UDP サーバー　　 (UDPServerLimits/UDPServerConfig/UDPServer)
         │   ├── __init__.py
         │   ├── tls.py      # UDP固有のDTLS関連処理
         │   ├── errors.py   # 例外クラス
-        │   ├── models.py   # 抽象化クラス
-        │   └── protocol.py # プロトコル
+        │   ├── models.py   # 抽象化クラス (UDPPort)
+        │   └── protocol.py # プロトコル　 (UDPHandler)
         ├── mail
         │   ├── helpers
         │   │   ├── __init__.py
@@ -69,13 +73,14 @@ kaede/
         ├── smtp
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # SMTPクライアント (高水準API)
-        │   │   └── server.py # SMTPサーバー　　 (高水準API)
+        │   │   ├── common.py # SMTP 共通　　　　 (SMTP      Limits/SMTP      Config)
+        │   │   ├── client.py # SMTP クライアント (SMTPClientLimits/SMTPClientConfig/SMTPClient)
+        │   │   └── server.py # SMTP サーバー　　 (SMTPServerLimits/SMTPServerConfig/SMTPServer)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # SMTP  共通
-        │   │   ├── base.py   # SMTP  基底 (SMTPHandler/SMTPConnection/SMTPProtocol)
-        │   │   └── s1.py     # SMTP1 固有 (S1  Handler/S1  Connection/S1  Protocol)
+        │   │   ├── common.py # SMTP  共通 (SMTPHandler)
+        │   │   ├── base.py   # SMTP  基底 (SMTPConnection/SMTPProtocol)
+        │   │   └── s1.py     # SMTP1 固有 (S1  Connection/S1  Protocol)
         │   ├── __init__.py
         │   ├── tls.py      # SMTP固有のTLS関連処理 (SMTPS関連処理)
         │   ├── errors.py   # 例外クラス
@@ -83,16 +88,17 @@ kaede/
         ├── imap
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # IMAPクライアント (高水準API)
-        │   │   └── server.py # IMAPサーバー　　 (高水準API)
+        │   │   ├── common.py # IMAP 共通　　　　 (IMAP      Limits/IMAP      Config)
+        │   │   ├── client.py # IMAP クライアント (IMAPClientLimits/IMAPClientConfig/IMAPClient)
+        │   │   └── server.py # IMAP サーバー　　 (IMAPServerLimits/IMAPServerConfig/IMAPServer)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # IMAP  共通
-        │   │   ├── base.py   # IMAP  基底 (IMAPHandler/IMAPConnection/IMAPProtocol)
-        │   │   ├── i1.py     # IMAP1 固有 (I1  Handler/I1  Connection/I1  Protocol)
-        │   │   ├── i2.py     # IMAP2 固有 (I2  Handler/I2  Connection/I2  Protocol)
-        │   │   ├── i3.py     # IMAP3 固有 (I3  Handler/I3  Connection/I3  Protocol)
-        │   │   └── i4.py     # IMAP4 固有 (I4  Handler/I4  Connection/I4  Protocol)
+        │   │   ├── common.py # IMAP  共通 (IMAPHandler)
+        │   │   ├── base.py   # IMAP  基底 (IMAPConnection/IMAPProtocol)
+        │   │   ├── i1.py     # IMAP1 固有 (I1  Connection/I1  Protocol)
+        │   │   ├── i2.py     # IMAP2 固有 (I2  Connection/I2  Protocol)
+        │   │   ├── i3.py     # IMAP3 固有 (I3  Connection/I3  Protocol)
+        │   │   └── i4.py     # IMAP4 固有 (I4  Connection/I4  Protocol)
         │   ├── __init__.py
         │   ├── tls.py      # IMAP固有のTLS関連処理 (IMAPS関連処理)
         │   ├── errors.py   # 例外クラス
@@ -100,15 +106,16 @@ kaede/
         ├── pop
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # POPクライアント (高水準API)
-        │   │   └── server.py # POPサーバー　　 (高水準API)
+        │   │   ├── common.py # POP 共通　　　　 (POP      Limits/POP      Config)
+        │   │   ├── client.py # POP クライアント (POPClientLimits/POPClientConfig/POPClient)
+        │   │   └── server.py # POP サーバー　　 (POPServerLimits/POPServerConfig/POPServer)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # POP  共通
-        │   │   ├── base.py   # POP  基底 (POPHandler/POPConnection/POPProtocol)
-        │   │   ├── p1.py     # POP1 固有 (P1 Handler/P1 Connection/P1 Protocol)
-        │   │   ├── p2.py     # POP2 固有 (P2 Handler/P2 Connection/P2 Protocol)
-        │   │   └── p3.py     # POP3 固有 (P3 Handler/P3 Connection/P3 Protocol)
+        │   │   ├── common.py # POP  共通 (POPHandler)
+        │   │   ├── base.py   # POP  基底 (POPConnection/POPProtocol)
+        │   │   ├── p1.py     # POP1 固有 (P1 Connection/P1 Protocol)
+        │   │   ├── p2.py     # POP2 固有 (P2 Connection/P2 Protocol)
+        │   │   └── p3.py     # POP3 固有 (P3 Connection/P3 Protocol)
         │   ├── __init__.py
         │   ├── tls.py      # POP固有のTLS関連処理 (POP3S関連処理)
         │   ├── errors.py   # 例外クラス
@@ -116,14 +123,15 @@ kaede/
         ├── quic
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # QUICクライアント (高水準API)
-        │   │   └── server.py # QUICサーバー　　 (高水準API)
+        │   │   ├── common.py # QUIC 共通　　　　 (QUIC      Limits/QUIC      Config)
+        │   │   ├── client.py # QUIC クライアント (QUICClientLimits/QUICClientConfig/QUICClient)
+        │   │   └── server.py # QUIC サーバー　　 (QUICServerLimits/QUICServerConfig/QUICServer)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # QUIC   共通
-        │   │   ├── base.py   # QUIC   基底 (QUICHandler/QUICConnection/QUICProtocol)
-        │   │   ├── q1.py     # QUICv1 固有 (Q1  Handler/Q1  Connection/Q1  Protocol)
-        │   │   └── q2.py     # QUICv2 固有 (Q2  Handler/Q2  Connection/Q2  Protocol)
+        │   │   ├── common.py # QUIC   共通 (QUICHandler)
+        │   │   ├── base.py   # QUIC   基底 (QUICConnection/QUICProtocol)
+        │   │   ├── q1.py     # QUICv1 固有 (Q1  Connection/Q1  Protocol)
+        │   │   └── q2.py     # QUICv2 固有 (Q2  Connection/Q2  Protocol)
         │   ├── __init__.py
         │   ├── tls.py      # QUIC固有のTLS関連処理
         │   ├── errors.py   # 例外クラス
@@ -131,65 +139,70 @@ kaede/
         ├── http
         │   ├── api
         │   │   ├── __init__.py
-        │   │   ├── client.py # HTTPクライアント (高水準API)
-        │   │   └── server.py # HTTPサーバー　　 (高水準API)
+        │   │   ├── common.py # HTTP 共通　　　　 (HTTP      Limits/HTTP      Config)
+        │   │   ├── client.py # HTTP クライアント (HTTPClientLimits/HTTPClientConfig/HTTPClient)
+        │   │   └── server.py # HTTP サーバー　　 (HTTPServerLimits/HTTPServerConfig/HTTPServer)
         │   ├── helpers
         │   │   ├── __init__.py
         │   │   ├── dns.py         # DNS   関連処理 (HTTPSレコード等)
         │   │   ├── hsts.py        # HSTS  関連処理
         │   │   ├── hpack.py       # HPACK 関連処理
         │   │   ├── qpack.py       # QPACK 関連処理
-        │   │   └── compression.py # メッセージボディ圧縮
+        │   │   └── compression.py # メッセージボディ圧縮 (compress/compress_with/decompress)
         │   ├── protocol
         │   │   ├── __init__.py
-        │   │   ├── common.py # HTTP     共通
-        │   │   ├── base.py   # HTTP     基底 (HTTPHandler/HTTPConnection/HTTPProtocol)
-        │   │   ├── h1.py     # HTTP/1.x 固有 (H1  Handler/H1  Connection/H1  Protocol)
-        │   │   ├── h2.py     # HTTP/2.x 固有 (H2  Handler/H2  Connection/H2  Protocol)
-        │   │   └── h3.py     # HTTP/3.x 固有 (H3  Handler/H3  Connection/H3  Protocol)
+        │   │   ├── handler.py # UDS/TCP/QUIC 接続ハンドラ (HTTPUDSHandler/HTTPTCPHandler/HTTPQUICHandler)
+        │   │   ├── common.py  # HTTP         共通　　　　 (HTTPHandler)
+        │   │   ├── base.py    # HTTP         基底　　　　 (HTTPConnection/HTTPProtocol)
+        │   │   ├── h1.py      # HTTP/1.x     固有　　　　 (H1  Connection/H1  Protocol)
+        │   │   ├── h2.py      # HTTP/2.x     固有　　　　 (H2  Connection/H2  Protocol)
+        │   │   └── h3.py      # HTTP/3.x     固有　　　　 (H3  Connection/H3  Protocol)
         │   ├── __init__.py
         │   ├── errors.py    # 例外クラス
-        │   ├── models.py    # 抽象化クラス
+        │   ├── models.py    # 抽象化クラス (HTTPPort/HTTPRole/HTTPBroadRole/HTTPHeaderCase/HTTPHeaders/HTTPMessage/HTTPRequest/HTTPResponse)
         │   ├── headers.py   # ヘッダー固有クラス
         │   ├── responses.py # レスポンス種類別のレスポンスクラス
-        │   ├── finalizer.py # リクエスト/レスポンスの後処理(Server/Dateヘッダーの付与等)とHTTP仕様準拠の検証
-        │   └── websocket.py # WebSocket固有処理
+        │   ├── finalizer.py # リクエスト/レスポンスの後処理(Server/Dateヘッダーの付与等)とHTTP仕様準拠の検証 (finalize_request/finalize_response)
+        │   └── websocket.py # WebSocket固有処理 (WSOpCode/WSCloseCode/WSFrame/WSConnection)
         └── dns
             ├── api
             │   ├── __init__.py
-            │   ├── client.py # DNSクライアント (高水準API)
-            │   └── server.py # DNSサーバー　　 (高水準API)
+            │   ├── common.py # DNS 共通　　　　 (DNS      Limits/DNS      Config)
+            │   ├── client.py # DNS クライアント (DNSClientLimits/DNSClientConfig/DNSClient)
+            │   └── server.py # DNS サーバー　　 (DNSServerLimits/DNSServerConfig/DNSServer)
             ├── helpers
             │   ├── __init__.py
             │   └── dnssec.py # DNSSEC 関連処理
             ├── protocol
             │   ├── __init__.py
-            │   ├── common.py # DNS            共通
-            │   ├── base.py   # DNS            基底 (DNS     Handler/DNS     Connection/DNS     Protocol)
-            │   ├── tcp.py    # DNS over TCP   固有 (DNSTCP  Handler/DNSTCP  Connection/DNSTCP  Protocol)
-            │   ├── udp.py    # DNS over UDP   固有 (DNSUDP  Handler/DNSUDP  Connection/DNSUDP  Protocol)
-            │   ├── tls.py    # DNS over TLS   固有 (DNSTLS  Handler/DNSTLS  Connection/DNSTLS  Protocol)
-            │   ├── quic.py   # DNS over QUIC  固有 (DNSQUIC Handler/DNSQUIC Connection/DNSQUIC Protocol)
-            │   └── https.py  # DNS over HTTPS 固有 (DNSHTTPSHandler/DNSHTTPSConnection/DNSHTTPSProtocol)
+            │   ├── handler.py # TCP/UDP/TLS/QUIC/HTTPS 接続ハンドラ (DNSTCPHandler/DNSUDPHandler/DNSTLSHandler/DNSQUICHandler/DNSHTTPSHandler)
+            │   ├── common.py  # DNS                    共通 (DNSHandler)
+            │   ├── base.py    # DNS                    基底 (DNS     Connection/DNS     Protocol)
+            │   ├── tcp.py     # DNS over TCP           固有 (DNSTCP  Connection/DNSTCP  Protocol)
+            │   ├── udp.py     # DNS over UDP           固有 (DNSUDP  Connection/DNSUDP  Protocol)
+            │   ├── tls.py     # DNS over TLS           固有 (DNSTLS  Connection/DNSTLS  Protocol)
+            │   ├── quic.py    # DNS over QUIC          固有 (DNSQUIC Connection/DNSQUIC Protocol)
+            │   └── https.py   # DNS over HTTPS         固有 (DNSHTTPSConnection/DNSHTTPSProtocol)
             ├── __init__.py
             ├── errors.py  # 例外クラス
-            ├── models.py  # レコード種別/レコードクラス/レコードデータ/レコード/レコード一覧 クラス
+            ├── models.py  # 抽象化クラス (DNSOpCode/DNSResponseCode/DNSRecordName/DNSRecordType/DNSRecordClass/DNSRecordData/DNSRecords/DNSExtension/DNSMessage)
             └── records.py # レコード種類別のレコードデータクラス
 ```
 
-## コードスタイル
-Kaedeのソースコードスタイルは、各言語の標準的なスタイルといくつかの点で異なります。既存のコード構造とスタイルを維持してください。
+## コードの制約
+Kaedeのソースコードのスタイルは、各言語の標準的なスタイルといくつかの点で異なります。既存のコード構造やスタイルを維持してください。
 
-例えば、Pythonでは:
-- プライベートなオブジェクト(定数、変数、関数、クラスなど)は存在しません。(Pythonの仕様上`_`から始める必要がなく、つまり`__str__`や`os._exit()`などでない場合、先頭が`_`で始まるオブジェクトは存在するべきではありません)
+- プライベートなオブジェクト(定数、変数、関数、クラスなど)は存在しません。(言語の仕様上`_`から始める必要がなく、つまりPythonでは`__str__`や`os._exit()`などでない場合、先頭が`_`で始まるオブジェクトは存在するべきではありません)
 - 内部処理のためだけに使用することを意図したオブジェクトを作成しないでください。すべてのオブジェクトは、ライブラリの利用者が直接使用する可能性があることを前提に設計する必要があります。
 - 特定のクラスに対して作用する関数は、その関数が過度に長い場合を除いて、クラス内にメソッドとして配置してください。
-- 関数や定数は、Enumやデータクラスの場合、またはPythonの仕様上クラス上に配置する必要があるもの(`_fields_`など)、または利便性のための最低限のクラス内定数(`OpenSSL.minimum_version`のように)を除いて、そのクラスが配置されているファイルに直接、インポート直後または対象クラス周辺に配置してください。
+- 関数や定数は、Enumやデータクラスの場合、または言語の仕様上クラス上に配置する必要があるもの(Pythonでは`_fields_`など)、または利便性のための最低限のクラス内定数(`OpenSSL.minimum_version`のように)を除いて、そのクラスが配置されているファイルに直接、インポート直後または対象クラス周辺に配置してください。
 - オブジェクト名はシンプルかつ役割や振る舞いを正確に理解できる必要があります。(例: `Server.cleanup_stale_socket()`ではなく`HTTPServer.cleanup()`)
 - あらゆる対応関係でコードの対称性を保ってください。これはプロトコル(TCP/UDP/QUIC、IMAP/POP3)、バージョン(HTTP/1.x/2.x/3.x)、役割(クライアント/サーバー)、方向性(リクエスト/レスポンス)、およびその他の対応する役割を果たすペアやグループ(例: エンコード/デコード、送信/受信、オープン/クローズ、クエリ/リプライ)が該当します。対称性にはオブジェクトの配置、役割、動作などが含まれ、例えば同じ種類のプロトコル同士であれば(そのプロトコル自身の特徴に関する箇所を除いて)完全なドロップイン互換を保証する必要があります。
     - Kaedeにおいて維持すべき重要な特性は、実用的に使用可能なレベルに達していること、誰もがどのプロトコルも簡単かつ直感的に使用できること、そしてバージョン・プロトコル・役割などのカウンターパート間の差異が最小限、あるいは一切存在しないことです。
     - 例として、バージョン間の互換性は基底クラスを作成し(`class H1Connection(HTTPConnection)`のように)継承させることで保証しやすくなります。また、そのクラスを使用する側は可能な限り(`H1Connection`のような)バージョン固有のクラスではなく(`HTTPConnection`のような)基底クラスを参照するようにするといいでしょう。
-- ...その他にも様々な慣例があります。作業中に何らかの特性を発見した場合は、そのパターンに従ってください。
+- 高レイヤーのプロトコルは、低レイヤーのプロトコルを扱う際、ライブラリの利用者と全く同じ方法で扱ってください。
+    - 例えばHTTPがTCPプロトコルでの通信を受けて処理するためには、TCPServer/HTTPTCPHandler(TCPHandler)/TCPServerConfig/TCPServerLimitsを使用します。
+- ...など。これらに限定されません。作業中に何らかの特徴を発見した際は、それに従ってください。
 
 ## 自動テスト
 自動テストにはpytestを使用します。最小限のテストは自動テストでカバーできますが、あくまで補助的なものであり、可能な限り手動テストを優先してください。
