@@ -80,11 +80,7 @@ class URL:
     def from_target(cls, target: str, scheme: str, authority: str) -> "URL":
         location = urllib.parse.urlsplit(f"//{authority}")
 
-        if target.startswith("/"): # origin-form: absolute-path [ "?" query ]
-            # RFC 9112 section 3.2.1 makes the whole target a literal path, so it
-            # must not be run through urlsplit: a target of "//host/path" would
-            # otherwise have "host" read as an authority and silently dropped,
-            # leaving url.path disagreeing with the target on the wire.
+        if target.startswith("/"): # origin-form
             path, _, query = target.partition("?")
             return cls(scheme=scheme, host=location.hostname or "", port=location.port, path=path, query=query, fragment="")
 
@@ -92,9 +88,6 @@ class URL:
             return cls(scheme=scheme, host=location.hostname or "", port=location.port, path="*", query="", fragment="")
 
         if "://" in target: # absolute-form
-            # The scheme in an absolute-form target is meaningful (a forward
-            # proxy uses it to reach the origin), so it is kept as written; the
-            # transport's own scheme is available separately as request.secure.
             return cls.parse(target)
 
         peer = urllib.parse.urlsplit(f"//{target}") # authority-form

@@ -27,7 +27,7 @@ class TCPServerConfig:
     tls: Optional[TLSConfig] = None
     alpn: Optional[List[str]] = None
 
-    idle_timeout: Optional[float] = None # drop a connection with no traffic for this long; None disables reaping
+    idle_timeout: Optional[float] = None
 
     handshake_timeout: Optional[float] = 30.0
 
@@ -40,7 +40,7 @@ class TCPGate:
         self.limits = limits
         self.connections = 0
         self.history: Dict[str, Deque[float]] = {}
-        self.history_limit = max(1024, limits.max_connection_nums) # a hard bound on tracked hosts
+        self.history_limit = max(1024, limits.max_connection_nums)
 
     @property
     def window(self) -> float:

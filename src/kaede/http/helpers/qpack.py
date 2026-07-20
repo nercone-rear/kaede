@@ -196,7 +196,7 @@ class QPACKDecoder:
     def line(self, data: bytes, offset: int) -> Tuple[str, str, bool, int]:
         byte = data[offset]
 
-        if byte & 0x80: # indexed field line, §4.5.2
+        if byte & 0x80: # indexed field line
             static = bool(byte & 0x40)
             index, offset = Coding.read_integer(data, offset, 6)
 
@@ -206,7 +206,7 @@ class QPACKDecoder:
             name, value = self.entry(index)
             return (name, value, False, offset)
 
-        if byte & 0x40: # literal field line with name reference, §4.5.4
+        if byte & 0x40: # literal field line with name reference
             never = bool(byte & 0x20)
             static = bool(byte & 0x10)
             index, offset = Coding.read_integer(data, offset, 4)
@@ -218,7 +218,7 @@ class QPACKDecoder:
             value, offset = self.string(data, offset)
             return (name, value, never, offset)
 
-        if byte & 0x20: # literal field line with literal name, §4.5.6
+        if byte & 0x20: # literal field line with literal name
             never = bool(byte & 0x10)
             huffman = bool(byte & 0x08)
             length, offset = Coding.read_integer(data, offset, 3)

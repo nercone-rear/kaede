@@ -419,7 +419,7 @@ class QUICConnection:
         self.dst = dst or ("", UDPPort(0))
 
         self.streams: Dict[int, "QUICStream"] = {}
-        self.max_streams: Optional[int] = None # the per-connection cap on concurrent remote-initiated bidirectional streams
+        self.max_streams: Optional[int] = None
 
         self.established = False
         self.closed = False
@@ -531,7 +531,7 @@ class QUICConnection:
                 self.library.set_host(self.pointer, identity)
 
         if ech is not None:
-            ECHConfigList.parse(ech) # validate the wire format before handing it to OpenSSL
+            ECHConfigList.parse(ech)
 
             if self.library.set_ech_config_list is None:
                 raise TLSConfigError("This OpenSSL does not provide ECH (Encrypted Client Hello): OpenSSL 4.0 or newer is required.")
@@ -675,8 +675,6 @@ class QUICConnection:
                 self.prune()
                 stream = self.adopt(pointer)
 
-                # RFC 9000 section 4.6 caps concurrent peer-opened bidirectional streams. OpenSSL exposes no
-                # setter for initial_max_streams_bidi, so one past the cap is refused rather than admitted.
                 if self.overflowing(stream):
                     stream.reset()
                     self.forget(stream)
@@ -799,8 +797,6 @@ class QUICStream:
 
     @property
     def spent(self) -> bool:
-        # A stream is done once we have stopped sending on it and have drained everything the peer sent, so the
-        # connection may forget it. Both halves are then closed, so its buffered send data is already with the peer.
         return self.pointer is None or (self.concluded and self.finished)
 
     async def send(self, data: bytes):

@@ -35,11 +35,8 @@ class DNSHandler:
         self.on_connection = on_connection # (connection: DNSConnection) -> None
 
 class DNSExchange:
-    """A one-shot transport that carries a single DoH query in and captures its reply, so the same
-    DNSHandler used for UDP/TCP/QUIC can serve DNS over HTTPS without knowing it speaks HTTP."""
-
     def __init__(self, query: bytes, client: Tuple[str, int] = ("", 0)):
-        self.incoming = bytearray(len(query).to_bytes(2, "big") + query) # framed like the other stream transports
+        self.incoming = bytearray(len(query).to_bytes(2, "big") + query)
         self.reply: Optional[bytes] = None
         self.dst = client
 
@@ -57,7 +54,7 @@ class DNSExchange:
         return chunk
 
     async def send(self, wire: bytes):
-        self.reply = wire[2:] # drop the two-byte length that the stream framing prepended
+        self.reply = wire[2:]
 
     async def close(self):
         return
@@ -67,7 +64,7 @@ class DNSServer:
         self.config = config or DNSServerConfig()
 
         self.handler: Optional[DNSHandler] = None
-        self.servers: List[Tuple[DNSPort, Union[UDPServer, TCPServer, QUICServer]]] = [] # an HTTPServer joins them for DoH
+        self.servers: List[Tuple[DNSPort, Union[UDPServer, TCPServer, QUICServer]]] = []
 
         self.stopped: Optional[asyncio.Event] = None
 

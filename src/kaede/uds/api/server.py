@@ -23,7 +23,7 @@ class UDSServerConfig:
 
     mode: Optional[int] = None # permission bits applied to each bound socket file, e.g. 0o600.
 
-    idle_timeout: Optional[float] = None # drop a connection with no traffic for this long; None disables reaping
+    idle_timeout: Optional[float] = None
 
 class UDSHandler:
     def __init__(self, on_connection: Optional[Callable] = None):
@@ -143,9 +143,6 @@ class UDSServer:
 
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
-        # Bind under a restrictive umask so the socket file is never reachable
-        # with looser permissions between bind() and the chmod below; otherwise
-        # a peer could connect during that window (before listen() even).
         if self.config.mode is not None and not path.abstract:
             previous = os.umask(0o777 & ~self.config.mode)
 

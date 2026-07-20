@@ -144,7 +144,6 @@ class DNSRecordType(Enum):
 
     @staticmethod
     def mnemonic(value: Union["DNSRecordType", int]) -> str:
-        # RFC 3597 section 5: an unknown type renders as TYPENNN, the inverse of from_name.
         return value.name if isinstance(value, DNSRecordType) else f"TYPE{value}"
 
 class DNSRecordClass(Enum):
@@ -332,10 +331,6 @@ class DNSName:
 
     @staticmethod
     def within(message: bytes, offset: int, end: int) -> Tuple[str, int]:
-        # A name embedded in record data must have its own encoding (labels and
-        # any leading compression pointer) end within that record's RDLENGTH; a
-        # name that runs past it, e.g. a label with no terminator inside the
-        # RDATA, would otherwise be read from the bytes of the following record.
         name, following = DNSName.unpack(message, offset)
 
         if following > end:

@@ -511,8 +511,6 @@ class Coding:
             if not byte & 0x80:
                 break
 
-            # RFC 9204 §4.1.1 asks a QPACK decoder to handle prefixed integers up to 62 bits,
-            # and this reader serves QPACK as well, so the ceiling is the QUIC varint maximum.
             if shift > 63:
                 raise HPACKError("An HPACK integer is too long.")
 
@@ -523,10 +521,6 @@ class Coding:
 
     @staticmethod
     def string(value: str, huffman: bool = True) -> bytes:
-        # A field value is opaque octets on the wire, and HTTP/1.x already reads and writes
-        # them as latin-1, so the same mapping is used here. Encoding as UTF-8 would make
-        # the round trip non injective: the octet e9 and the octets c3 a9 both came back as
-        # c3 a9, so a value that survived a decode was corrupted by the matching encode.
         raw = value.encode("latin-1")
         packed = Huffman.encode(raw)
 
@@ -561,8 +555,6 @@ class HPACKEncoder:
             name, value = field
             name = name.lower()
 
-            # A field that arrived never-indexed stays never-indexed. The SENSITIVE set is
-            # only the fallback for fields Kaede itself originates, where no sender said.
             never = getattr(field, "never", None)
             never = name in SENSITIVE if never is None else never
 

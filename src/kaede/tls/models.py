@@ -234,7 +234,7 @@ class TLSConfig:
     verify_mode:  Optional[ssl.VerifyMode] = None
     verify_flags: ssl.VerifyFlags          = ssl.VerifyFlags.VERIFY_X509_TRUSTED_FIRST
 
-    ech_pemfiles: List[str] = field(default_factory=list) # server: PEM files carrying an ECHConfig and its private key (as produced by `openssl ech`)
+    ech_pemfiles: List[str] = field(default_factory=list)
 
     groups: List[TLSGroup] = field(default_factory=lambda: [
         # PQC (Hybrid)
@@ -265,7 +265,4 @@ class TLSConfig:
     ])
 
     def verification(self, server: bool) -> ssl.VerifyMode:
-        if self.verify_mode is not None:
-            return self.verify_mode
-
-        return ssl.CERT_NONE if server else ssl.CERT_REQUIRED
+        return self.verify_mode or (ssl.CERT_NONE if server else ssl.CERT_REQUIRED)

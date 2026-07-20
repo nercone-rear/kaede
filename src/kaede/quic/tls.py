@@ -121,12 +121,8 @@ class QTLS:
         ssl, crypto = self.library.ssl, self.library.crypto
 
         # Methods
-        self.client_method = self.bind(ssl, "OSSL_QUIC_client_method", VOID_P, [], required=False)
-
-        if self.client_method is None:
-            return
-
-        self.server_method = self.bind(ssl, "OSSL_QUIC_server_method", VOID_P, [], required=False)
+        self.client_method = self.bind(ssl, "OSSL_QUIC_client_method", VOID_P, [])
+        self.server_method = self.bind(ssl, "OSSL_QUIC_server_method", VOID_P, [])
 
         # Connections
         self.set_blocking     = self.bind(ssl, "SSL_set_blocking_mode", INT, [VOID_P, INT])

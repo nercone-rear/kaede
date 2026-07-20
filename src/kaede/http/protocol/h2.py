@@ -146,8 +146,6 @@ class H2Session:
         self.closing = False
         self.error: Optional[Exception] = None
 
-    # -- framing ---------------------------------------------------------
-
     async def write(self, frame: H2Frame):
         async with self.writing:
             try:
@@ -166,8 +164,6 @@ class H2Session:
         payload = await self.transport.receive_exactly(length) if length else b""
 
         return H2Frame(type=header[3], flags=header[4], stream=int.from_bytes(header[5:9], "big") & 0x7FFFFFFF, payload=payload)
-
-    # -- lifecycle -------------------------------------------------------
 
     async def start(self):
         if self.role == HTTPBroadRole.SERVER:
@@ -270,8 +266,6 @@ class H2Session:
 
         except (TCPError, UDSError, TLSError):
             pass
-
-    # -- inbound frames --------------------------------------------------
 
     async def handle(self, frame: H2Frame):
         if self.pending is not None and frame.type != Frame.CONTINUATION:
@@ -545,8 +539,6 @@ class H2Session:
 
         await self.wake()
 
-    # -- flow control ----------------------------------------------------
-
     async def wake(self):
         async with self.flow:
             self.flow.notify_all()
@@ -579,8 +571,6 @@ class H2Session:
 
     def forget(self, stream: int):
         self.streams.pop(stream, None)
-
-    # -- outbound requests (client) --------------------------------------
 
     async def request(self, message: HTTPRequest) -> "H2Connection":
         if self.closing or self.error is not None:
@@ -837,8 +827,6 @@ class H2Connection(HTTPConnection):
         if length != self.counted:
             raise H2StreamError(Code.PROTOCOL_ERROR, self.id, "Content-Length does not equal the length of the body received.")
 
-    # -- receiving -------------------------------------------------------
-
     async def receive_message(self) -> Optional[HTTPMessage]:
         while not self.ended:
             self.ready = asyncio.get_running_loop().create_future()
@@ -878,8 +866,6 @@ class H2Connection(HTTPConnection):
         if isinstance(message.body, bytes) and message.body and "Content-Encoding" in message.headers:
             message.compressed = True
             decompress(message, limits=self.limits)
-
-    # -- sending ---------------------------------------------------------
 
     async def send_message(self, message: HTTPMessage, *, final: bool = True):
         if self.role == HTTPBroadRole.SERVER:

@@ -18,7 +18,7 @@ class UDPClientConfig:
 class UDPClient:
     def __init__(self, dst: Tuple[str, UDPPort], src: Optional[UDPPort] = None, *, config: Optional[UDPClientConfig] = None):
         self.dst = dst
-        self.src = UDPPort(0) if src is None else UDPPort(src) # 0 lets the OS assign an ephemeral port.
+        self.src = UDPPort(0) if src is None else UDPPort(src)
         self.config = config or UDPClientConfig()
 
         self.context = TLSContext(self.config.tls, server=False, alpn=self.config.alpn, datagram=True) if self.config.tls is not None else None

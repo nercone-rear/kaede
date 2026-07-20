@@ -20,7 +20,7 @@ class QUICClientConfig:
 class QUICClient:
     def __init__(self, dst: Tuple[str, UDPPort], src: Optional[UDPPort] = None, *, config: Optional[QUICClientConfig] = None):
         self.dst = dst
-        self.src = UDPPort(0) if src is None else UDPPort(src) # 0 lets the OS assign an ephemeral port.
+        self.src = UDPPort(0) if src is None else UDPPort(src)
         self.config = config or QUICClientConfig()
 
         self.context = QUICContext(self.config.tls or TLSConfig(), server=False, alpn=self.config.alpn)

@@ -375,7 +375,7 @@ class OpenSSL:
         self.get_servername  = self.bind(self.ssl, "SSL_get_servername", STR, [VOID_P, INT])
         self.reused          = self.bind(self.ssl, "SSL_session_reused", INT, [VOID_P])
 
-        # ECH (Encrypted Client Hello, RFC 9849). Only present from OpenSSL 4.0 onwards.
+        # ECH (4.0+ only)
         self.echstore_new         = self.bind(self.ssl, "OSSL_ECHSTORE_new", VOID_P, [VOID_P, STR], required=False)
         self.echstore_free        = self.bind(self.ssl, "OSSL_ECHSTORE_free", VOID, [VOID_P], required=False)
         self.echstore_read_pem    = self.bind(self.ssl, "OSSL_ECHSTORE_read_pem", INT, [VOID_P, VOID_P, INT], required=False)
@@ -745,7 +745,7 @@ class TLSSession:
         self.hostname = hostname
 
         if ech is not None:
-            ECHConfigList.parse(ech) # validate the wire format before handing it to OpenSSL
+            ECHConfigList.parse(ech)
 
         self.ech = ech
 

@@ -43,7 +43,7 @@ class UDPGate:
         self.limits = limits
         self.connections = 0
         self.history: Dict[str, Deque[float]] = {}
-        self.history_limit = max(1024, limits.max_connection_nums) # a hard bound on tracked hosts; UDP source addresses are spoofable
+        self.history_limit = max(1024, limits.max_connection_nums)
 
     @property
     def window(self) -> float:

@@ -5,15 +5,11 @@ from ..errors import TLSConfigError
 
 @dataclass(frozen=True)
 class ECHConfig:
-    """A single parsed ECHConfig entry from an ECHConfigList (RFC 9849)."""
-
     version: int
     public_name: str
     max_name_length: int
 
 class ECHConfigList:
-    """The ECHConfigList wire format (RFC 9849): a length-prefixed list of ECHConfig entries."""
-
     RFC9849_VERSION = 0xfe0d
 
     @staticmethod
@@ -52,7 +48,6 @@ class ECHConfigList:
 
     @staticmethod
     def contents(raw: bytes) -> ECHConfig:
-        # config_id(1) + kem_id(2) + public_key<2 + len> + cipher_suites<2 + len> + max_name_length(1) + public_name<1 + len> + extensions<2 + len>
         if len(raw) < 1 + 2 + 2:
             raise TLSConfigError("An ECHConfig is too short to carry its fixed fields.")
 
@@ -87,19 +82,17 @@ class ECHConfigList:
 
 @dataclass(frozen=True)
 class ECHStatus:
-    """The outcome of Encrypted Client Hello for a TLS session, from SSL_ech_get1_status."""
-
-    BACKEND             = 4  # this side is an ECH backend: it saw an inner Client Hello directly
-    GREASE_ECH          = 3  # ECH was greased and the server replied with an ECH extension
-    GREASE              = 2  # ECH was greased (no real config was configured)
+    BACKEND             = 4
+    GREASE_ECH          = 3
+    GREASE              = 2
     SUCCESS             = 1
     FAILED              = 0
     BAD_CALL            = -100
     NOT_TRIED           = -101
-    BAD_NAME            = -102 # ECH succeeded but the certificate does not match the inner name
+    BAD_NAME            = -102
     NOT_CONFIGURED      = -103
-    FAILED_ECH          = -105 # ECH failed, but the server (identified by a trusted certificate) returned retry configs
-    FAILED_ECH_BAD_NAME = -106 # as FAILED_ECH, but the certificate does not even match the outer (public) name
+    FAILED_ECH          = -105
+    FAILED_ECH_BAD_NAME = -106
 
     code: int
     inner_sni: Optional[str] = None

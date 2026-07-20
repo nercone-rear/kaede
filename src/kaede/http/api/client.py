@@ -29,7 +29,7 @@ class HTTPClientConfig:
     limits: HTTPLimits = field(default_factory=lambda: HTTPLimits())
 
     tls: Union[TLSConfig, Dict[str, TLSConfig]] = field(default_factory=lambda: TLSConfig()) # TLSConfig or {hostname: TLSConfig, ...}
-    ech: Union[None, bytes, Dict[str, bytes]] = None # ECHConfigList or {hostname: ECHConfigList, ...}, e.g. from HTTPSRecordProbe.ech()
+    ech: Union[None, bytes, Dict[str, bytes]] = None # List[ECHConfig] or {hostname: List[ECHConfig], ...}
 
     connect_timeout: Optional[float] = 30.0
 

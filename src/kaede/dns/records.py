@@ -22,7 +22,6 @@ class RawRecordData(DNSRecordData):
 
     @classmethod
     def from_text(cls, tokens):
-        # RFC 3597 section 5: \# <length> <hexdata>.
         if len(tokens) < 2 or tokens[0] != "\\#":
             raise DNSFormatError("The generic record data must begin with the \\# token and a length.")
 
@@ -36,7 +35,6 @@ class RawRecordData(DNSRecordData):
 
     @property
     def text(self) -> str:
-        # RFC 3597 section 5: \# <length> <hexdata>.
         if not self.raw:
             return "\\# 0"
 
@@ -386,7 +384,6 @@ class RRSIGRecordData(DNSRecordData):
 
     @staticmethod
     def moment(text: str) -> int:
-        # RFC 4034 section 3.2: a time is either 14 digits of YYYYMMDDHHMMSS or a 32-bit second count.
         if len(text) == 14 and text.isdigit():
             return calendar.timegm(time.strptime(text, "%Y%m%d%H%M%S"))
 
@@ -522,7 +519,6 @@ class NSEC3RecordData(DNSRecordData):
 
     @staticmethod
     def encode32(data: bytes) -> str:
-        # RFC 4648 section 7: Base32hex, the "extended hex" alphabet. base64.b32hexencode only exists on 3.10+.
         swap = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567", "0123456789ABCDEFGHIJKLMNOPQRSTUV")
 
         return base64.b32encode(data).decode().translate(swap).rstrip("=")
@@ -535,7 +531,6 @@ class NSEC3RecordData(DNSRecordData):
 
     @classmethod
     def from_text(cls, tokens):
-        # RFC 5155 section 3.3: the next hashed owner is unpadded Base32hex.
         return cls(
             algorithm=int(tokens[0]),
             flags=int(tokens[1]),
@@ -547,7 +542,6 @@ class NSEC3RecordData(DNSRecordData):
 
     @property
     def text(self) -> str:
-        # RFC 5155 section 3.3: an empty salt is a "-"; the next hashed owner is unpadded Base32hex.
         salt = self.salt.hex().upper() if self.salt else "-"
         parts = [str(self.algorithm), str(self.flags), str(self.iterations), salt, NSEC3RecordData.encode32(self.next_hashed)]
 
@@ -572,7 +566,6 @@ class NSEC3PARAMRecordData(DNSRecordData):
 
     @classmethod
     def from_text(cls, tokens):
-        # RFC 5155 section 4.3: an empty salt is a "-".
         return cls(
             algorithm=int(tokens[0]),
             flags=int(tokens[1]),
@@ -582,7 +575,6 @@ class NSEC3PARAMRecordData(DNSRecordData):
 
     @property
     def text(self) -> str:
-        # RFC 5155 section 4.3: an empty salt is a "-".
         return f"{self.algorithm} {self.flags} {self.iterations} {self.salt.hex().upper() if self.salt else '-'}"
 
 @dataclass(frozen=True)
@@ -730,7 +722,6 @@ class SVCBRecordData(DNSRecordData):
 
     @staticmethod
     def code_of(key: str) -> int:
-        # RFC 9460 section 2.1: a SvcParamKey is a registered name or the generic keyNNNNN form.
         if key in SVCBRecordData.KEYS:
             return SVCBRecordData.KEYS[key]
 
@@ -741,7 +732,6 @@ class SVCBRecordData(DNSRecordData):
 
     @staticmethod
     def mnemonic(code: int) -> str:
-        # RFC 9460 section 2.1: an unregistered key renders as keyNNNNN.
         for key, value in SVCBRecordData.KEYS.items():
             if value == code:
                 return key

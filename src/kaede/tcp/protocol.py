@@ -220,9 +220,6 @@ class TCPConnection:
         self.wake()
 
     def drop(self):
-        # An immediate teardown used by the server to reap an idle connection.
-        # It aborts the transport and reports end-of-file so a handler blocked in
-        # receive() wakes at once rather than holding a connection slot forever.
         if self.closed:
             return
 

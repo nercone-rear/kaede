@@ -19,7 +19,7 @@ class TCPClientConfig:
 class TCPClient:
     def __init__(self, dst: Tuple[str, TCPPort], src: Optional[TCPPort] = None, *, config: Optional[TCPClientConfig] = None):
         self.dst = dst
-        self.src = TCPPort(0) if src is None else TCPPort(src) # 0 lets the OS assign an ephemeral port.
+        self.src = TCPPort(0) if src is None else TCPPort(src)
         self.config = config or TCPClientConfig()
 
         self.context = TLSContext(self.config.tls, server=False, alpn=self.config.alpn) if self.config.tls is not None else None
