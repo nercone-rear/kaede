@@ -9,8 +9,9 @@ check both halves, the detection and the reporting.
 import pytest
 
 from kaede.quic.errors import QUICError, QUICClosedError
-from kaede.http.models import HTTPBroadRole, HTTPLimits
-from kaede.http.protocol.h3 import H3Session, H3Error, Varint, Stream, Kind, Setting, Code
+from kaede.http.models import HTTPBroadRole
+from kaede.http.api.common import HTTPLimits
+from kaede.http.protocol.h3 import H3Protocol, H3Error, Varint, Stream, Kind, Setting, Code
 
 def frame(kind: int, payload: bytes = b"") -> bytes:
     return Varint.encode(kind) + Varint.encode(len(payload)) + payload
@@ -58,9 +59,9 @@ class Connection:
     async def close(self, code: int = 0, reason: str = "", **_):
         self.code, self.reason = code, reason
 
-def session(server=True) -> H3Session:
-    built = H3Session.__new__(H3Session)
-    H3Session.__init__(built, Connection(), role=HTTPBroadRole.SERVER if server else HTTPBroadRole.CLIENT, limits=HTTPLimits())
+def session(server=True) -> H3Protocol:
+    built = H3Protocol.__new__(H3Protocol)
+    H3Protocol.__init__(built, Connection(), role=HTTPBroadRole.SERVER if server else HTTPBroadRole.CLIENT, limits=HTTPLimits())
 
     return built
 

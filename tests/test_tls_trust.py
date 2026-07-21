@@ -8,7 +8,7 @@ from kaede.tls import TLSConfig
 from kaede.tls.errors import TLSConfigError, TLSVerificationError
 from kaede.tls.openssl import TLSContext
 from kaede.tcp import TCPPort, TCPClient, TCPServer, TCPServerConfig, TCPHandler
-from kaede.tcp.api.client import TCPClientConfig
+from kaede.tcp.api.client import TCPClientConfig, TCPClientLimits
 
 LOCAL = "127.0.0.1"
 
@@ -36,7 +36,7 @@ class Running:
         await self.server.close(timeout=2)
 
 def client(server, tls):
-    config = TCPClientConfig(connect_timeout=5)
+    config = TCPClientConfig(limits=TCPClientLimits(timeout_connection=5))
     config.tls = tls
     config.hostname = "localhost"
 

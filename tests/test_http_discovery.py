@@ -4,7 +4,7 @@ import pytest
 
 from kaede.tcp import TCPPort
 from kaede.udp import UDPPort
-from kaede.dns import DNSPort, DNSRecordType, DNSRecord, DNSRecords, DNSClient, DNSClientConfig, DNSServer, DNSServerConfig, DNSHandler
+from kaede.dns import DNSPort, DNSRecordType, DNSRecord, DNSRecords, DNSClient, DNSClientConfig, DNSClientLimits, DNSServer, DNSServerConfig, DNSHandler
 from kaede.dns.records import SVCBRecordData, HTTPSRecordData
 from kaede.http.helpers.dns import HTTPSRecordProbe
 
@@ -40,7 +40,7 @@ class Running:
         await self.server.close(timeout=0.2)
 
 def client(server) -> DNSClient:
-    return DNSClient(config=DNSClientConfig(servers=list(server.ports), timeout=2.0, retries=0, cache=False))
+    return DNSClient(config=DNSClientConfig(servers=list(server.ports), limits=DNSClientLimits(timeout_query=2.0, max_retries=0), cache=False))
 
 class TestDiscovery:
     async def test_the_probe_finds_the_https_record(self):

@@ -1,16 +1,22 @@
 from typing import Optional, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from ..models import UDSAddress
+from ...models import ClientLimits
+from ..models import UDSPort
 from ..protocol import UDSConnection
+from .common import UDSLimits, UDSConfig
 
 @dataclass
-class UDSClientConfig:
-    connect_timeout: Optional[float] = 30.0
+class UDSClientLimits(UDSLimits, ClientLimits):
+    pass
+
+@dataclass
+class UDSClientConfig(UDSConfig):
+    limits: UDSClientLimits = field(default_factory=lambda: UDSClientLimits())
 
 class UDSClient:
-    def __init__(self, dst: UDSAddress, *, config: Optional[UDSClientConfig] = None):
-        self.dst = UDSAddress(dst)
+    def __init__(self, dst: UDSPort, *, config: Optional[UDSClientConfig] = None):
+        self.dst = UDSPort(dst)
         self.config = config or UDSClientConfig()
 
         self.connections: List[UDSConnection] = []
@@ -21,14 +27,16 @@ class UDSClient:
     async def __aexit__(self, *_):
         await self.close()
 
-    async def open(self, dst: Optional[UDSAddress] = None) -> UDSConnection:
-        dst = self.dst if dst is None else UDSAddress(dst)
-
-        connection = UDSConnection(UDSAddress(""), dst)
-        await connection.connect(self.config.connect_timeout)
+    async def open(self, dst: Optional[UDSPort] = None) -> UDSConnection:
+        connection = UDSConnection(UDSPort(""), self.dst if dst is None else UDSPort(dst), limits=self.config.limits)
+        await connection.connect(self.config.limits.timeout_connection)
 
         self.connections = [kept for kept in self.connections if not kept.closed]
         self.connections.append(connection)
+
+        while len(self.connections) > self.config.limits.max_connection_keep:
+            await self.connections.pop(0).close()
+
         return connection
 
     async def close(self):

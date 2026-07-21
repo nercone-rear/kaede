@@ -1,16 +1,17 @@
 import asyncio
-from typing import Optional, Union, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple
 from collections.abc import AsyncIterator
 
 from ...url import URL
 from ...constants import Digits
-from ...quic.errors import QUICError, QUICClosedError, QUICStreamError
+from ...quic.errors import QUICError
 from ..models import HTTPBroadRole, HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
 from ..errors import HTTPError
 from ..finalizer import finalize_response
 from ..helpers.compression import compress, decompress
 from ..helpers.qpack import QPACKEncoder, QPACKDecoder, QPACKError
-from .connection import HTTPConnection, HTTPState
+from .common import HTTPState
+from .base import HTTPConnection, HTTPProtocol
 
 class Varint:
     MARKS = {1: 0x00, 2: 0x40, 4: 0x80, 8: 0xC0}
@@ -91,7 +92,7 @@ class H3Error(Exception):
     def streamwise(self) -> bool:
         return self.code in Code.STREAMWISE
 
-class H3Session:
+class H3Protocol(HTTPProtocol):
     def __init__(self, connection, *, role: HTTPBroadRole, limits, observer=None):
         self.connection = connection
         self.role = role
@@ -424,7 +425,7 @@ class H3Connection(HTTPConnection):
     REQUEST_PSEUDO  = frozenset({":method", ":scheme", ":path", ":authority"})
     RESPONSE_PSEUDO = frozenset({":status"})
 
-    def __init__(self, session: H3Session, stream, *, role: HTTPBroadRole):
+    def __init__(self, session: H3Protocol, stream, *, role: HTTPBroadRole):
         super().__init__(("", None), ("", None), transport=session.connection, version="HTTP/3.0", limits=session.limits, observer=session.observer)
 
         self.session = session

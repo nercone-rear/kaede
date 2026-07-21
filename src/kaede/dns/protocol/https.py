@@ -1,20 +1,63 @@
-from typing import Optional, Callable, Tuple
+from typing import Optional, Tuple, TYPE_CHECKING
 
 from ...tls import TLSConfig
 from ..models import DNSMessage
-from ..errors import DNSError, DNSFormatError, DNSConnectionError, DNSServerError, DNSTimeoutError
-from .handler import DNSTransport
+from ..errors import DNSFormatError, DNSConnectionError, DNSServerError, DNSClosedError
+from .base import DNSConnection, DNSProtocol
 
-class DNSHTTPSTransport(DNSTransport):
-    def __init__(self, dst: Tuple[str, int], *, path: str = "/dns-query", tls: Optional[TLSConfig] = None, hostname: Optional[str] = None, connect_timeout: float = 5.0):
-        from ...http.api.client import HTTPClient, HTTPClientConfig
+if TYPE_CHECKING:
+    from ..api.client import DNSClientLimits
+
+class DNSHTTPSConnection(DNSConnection):
+    def __init__(self, query: bytes, client: Tuple[str, int] = ("", 0)):
+        super().__init__(None, stream=True, server=True)
+
+        self.incoming = bytearray(len(query).to_bytes(2, "big") + query)
+        self.reply: Optional[bytes] = None
+        self.dst = client
+
+    @property
+    def client(self) -> Tuple[str, int]:
+        return self.dst
+
+    @property
+    def closed(self) -> bool:
+        return self.reply is not None
+
+    async def framed(self) -> bytes:
+        header = await self.pull(2)
+
+        return await self.pull(int.from_bytes(header, "big"))
+
+    async def pull(self, n: int) -> bytes:
+        if len(self.incoming) < n:
+            raise DNSClosedError("A DoH exchange carries a single query.")
+
+        chunk = bytes(self.incoming[:n])
+        del self.incoming[:n]
+
+        return chunk
+
+    async def deliver(self, wire: bytes):
+        self.reply = wire[2:]
+
+    async def close(self):
+        return
+
+class DNSHTTPSProtocol(DNSProtocol):
+    def __init__(self, dst: Tuple[str, int], *, path: str = "/dns-query", tls: Optional[TLSConfig] = None, hostname: Optional[str] = None, limits: Optional["DNSClientLimits"] = None):
+        from ...http.api.client import HTTPClient, HTTPClientConfig, HTTPClientLimits
+        from ..api.client import DNSClientLimits
+
+        self.limits = limits or DNSClientLimits()
 
         self.host = hostname or dst[0]
         self.url = f"https://{self.host}{'' if dst[1] == 443 else f':{dst[1]}'}{path}"
 
-        self.client = HTTPClient(config=HTTPClientConfig(versions=["HTTP/2.0", "HTTP/1.1"], tls=tls or TLSConfig(), connect_timeout=connect_timeout))
+        self.client = HTTPClient(config=HTTPClientConfig(versions=["HTTP/2.0", "HTTP/1.1"], tls=tls or TLSConfig(), limits=HTTPClientLimits(timeout_connection=self.limits.timeout_connection)))
 
-    async def query(self, message: DNSMessage, *, timeout: float = 3.0) -> DNSMessage:
+    async def query(self, message: DNSMessage, *, timeout: Optional[float] = None) -> DNSMessage:
+        timeout = self.limits.timeout_query if timeout is None else timeout
         message.id = 0
 
         from ...http.errors import HTTPError
@@ -49,63 +92,3 @@ class DNSHTTPSTransport(DNSTransport):
 
     async def close(self):
         await self.client.close()
-
-class DNSHTTPSHandler:
-    MEDIA = "application/dns-message"
-
-    def __init__(self, resolve: Callable):
-        self.resolve = resolve # (query: DNSMessage) -> DNSMessage (may be async)
-
-    async def on_connection(self, connection):
-        import base64
-        from ...http.models import HTTPResponse, HTTPHeaders
-        from ...http.errors import HTTPError
-        from ...http.finalizer import finalize_response
-
-        request = await connection.receive()
-
-        try:
-            wire = self.extract(request, base64)
-
-        except HTTPError as e:
-            await connection.send(await finalize_response(HTTPResponse(status_code=e.code, headers=HTTPHeaders(), body=(e.message or "").encode(), compression=False)))
-            return
-
-        try:
-            query = DNSMessage.unpack(wire)
-            answer = self.resolve(query)
-
-            if hasattr(answer, "__await__"):
-                answer = await answer
-
-        except DNSError:
-            answer = DNSMessage(response=True, rcode=1)
-
-        headers = HTTPHeaders([("Content-Type", DNSHTTPSHandler.MEDIA)])
-        await connection.send(await finalize_response(HTTPResponse(status_code=200, headers=headers, body=answer.pack(), compression=False)))
-
-    def extract(self, request, base64) -> bytes:
-        from ...http.errors import HTTPError
-
-        if request.method == "POST":
-            if request.headers.get("Content-Type", "").split(";")[0].strip().lower() != DNSHTTPSHandler.MEDIA:
-                raise HTTPError(415, "Unsupported Media Type")
-
-            return request.body if isinstance(request.body, bytes) else b""
-
-        if request.method == "GET":
-            encoded = request.url.params.get("dns", [""])[0]
-
-            if not encoded:
-                raise HTTPError(400, "Bad Request")
-
-            try:
-                return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
-
-            except (ValueError, TypeError):
-                raise HTTPError(400, "Bad Request")
-
-        raise HTTPError(405, "Method Not Allowed")
-
-    async def on_websocket(self, connection):
-        await connection.close(1011, "WebSocket is not part of DoH.")

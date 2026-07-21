@@ -12,7 +12,6 @@ from .errors import DNSFormatError, DNSNameError
 class DNSPort:
     type: Literal["tcp", "udp", "quic", "https"] = "tcp"
     value: Union[str, int, TCPPort, UDPPort, HTTPPort] = TCPPort(53)
-    secure: bool = False
 
     @property
     def valid(self) -> bool:
@@ -21,11 +20,11 @@ class DNSPort:
         elif self.type == "udp":
             return isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
         elif self.type == "quic":
-            return (isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)) and self.secure
+            return isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
         elif self.type == "https":
-            return (isinstance(self.value, HTTPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)) and self.secure
+            return isinstance(self.value, HTTPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
 
-class DNSOpcode(Enum):
+class DNSOpCode(Enum):
     QUERY  = 0
     IQUERY = 1
     STATUS = 2
@@ -34,9 +33,9 @@ class DNSOpcode(Enum):
     DSO    = 6
 
     @staticmethod
-    def of(value: int) -> Union["DNSOpcode", int]:
+    def of(value: int) -> Union["DNSOpCode", int]:
         try:
-            return DNSOpcode(value)
+            return DNSOpCode(value)
         except ValueError:
             return value
 
@@ -164,7 +163,7 @@ class DNSRecordClass(Enum):
 
         return value
 
-class DNSName:
+class DNSRecordName:
     MAX_LENGTH = 255
     MAX_LABEL  = 63
     MAX_JUMPS  = 128
@@ -239,19 +238,19 @@ class DNSName:
             if not label:
                 raise DNSNameError(f"The name {name!r} contains an empty label.")
 
-            if len(label) > DNSName.MAX_LABEL:
-                raise DNSNameError(f"The label {label!r} is {len(label)} bytes, but a label carries at most {DNSName.MAX_LABEL}.")
+            if len(label) > DNSRecordName.MAX_LABEL:
+                raise DNSNameError(f"The label {label!r} is {len(label)} bytes, but a label carries at most {DNSRecordName.MAX_LABEL}.")
 
             total += len(label) + 1
 
-        if total > DNSName.MAX_LENGTH:
-            raise DNSNameError(f"The name {name!r} is {total} wire bytes, but a name carries at most {DNSName.MAX_LENGTH}.")
+        if total > DNSRecordName.MAX_LENGTH:
+            raise DNSNameError(f"The name {name!r} is {total} wire bytes, but a name carries at most {DNSRecordName.MAX_LENGTH}.")
 
         return labels
 
     @staticmethod
     def pack(name: str, message: bytearray, pointers: Optional[Dict[Tuple[bytes, ...], int]] = None, compress: bool = True):
-        labels = DNSName.split(name)
+        labels = DNSRecordName.split(name)
 
         for index in range(len(labels)):
             suffix = tuple(label.lower() for label in labels[index:])
@@ -271,7 +270,7 @@ class DNSName:
     @staticmethod
     def wire(name: str) -> bytes:
         message = bytearray()
-        DNSName.pack(name, message, None, compress=False)
+        DNSRecordName.pack(name, message, None, compress=False)
 
         return bytes(message)
 
@@ -303,8 +302,8 @@ class DNSName:
 
                 jumps += 1
 
-                if jumps > DNSName.MAX_JUMPS:
-                    raise DNSFormatError(f"The name chains more than {DNSName.MAX_JUMPS} compression pointers.")
+                if jumps > DNSRecordName.MAX_JUMPS:
+                    raise DNSFormatError(f"The name chains more than {DNSRecordName.MAX_JUMPS} compression pointers.")
 
                 position = target
 
@@ -323,15 +322,15 @@ class DNSName:
 
                 total += length + 1
 
-                if total > DNSName.MAX_LENGTH:
-                    raise DNSNameError(f"The name grows past {DNSName.MAX_LENGTH} wire bytes.")
+                if total > DNSRecordName.MAX_LENGTH:
+                    raise DNSNameError(f"The name grows past {DNSRecordName.MAX_LENGTH} wire bytes.")
 
-                labels.append(DNSName.escape(message[position + 1:position + 1 + length]))
+                labels.append(DNSRecordName.escape(message[position + 1:position + 1 + length]))
                 position += 1 + length
 
     @staticmethod
     def within(message: bytes, offset: int, end: int) -> Tuple[str, int]:
-        name, following = DNSName.unpack(message, offset)
+        name, following = DNSRecordName.unpack(message, offset)
 
         if following > end:
             raise DNSFormatError("A name runs past the end of its record data.")
@@ -395,7 +394,7 @@ class DNSQuestion:
     rclass: Union[DNSRecordClass, int] = DNSRecordClass.IN
 
     def matches(self, other: "DNSQuestion") -> bool:
-        return DNSName.key(self.name) == DNSName.key(other.name) and self.type == other.type and self.rclass == other.rclass
+        return DNSRecordName.key(self.name) == DNSRecordName.key(other.name) and self.type == other.type and self.rclass == other.rclass
 
 @dataclass(frozen=True)
 class DNSRecord:
@@ -445,7 +444,7 @@ class DNSRecords:
             found = [record for record in found if record.type == type]
 
         if name is not None:
-            found = [record for record in found if DNSName.key(record.name) == DNSName.key(name)]
+            found = [record for record in found if DNSRecordName.key(record.name) == DNSRecordName.key(name)]
 
         return DNSRecords(found)
 
@@ -531,7 +530,7 @@ class DNSRecords:
         return cls(records)
 
 @dataclass
-class EDNS:
+class DNSExtension:
     payload_size: int = 1232
     version: int = 0
     do: bool = False
@@ -542,7 +541,7 @@ class DNSMessage:
     id: int = 0
 
     response: bool = False
-    opcode: Union[DNSOpcode, int] = DNSOpcode.QUERY
+    opcode: Union[DNSOpCode, int] = DNSOpCode.QUERY
 
     authoritative: bool = False
     truncated: bool = False
@@ -558,7 +557,7 @@ class DNSMessage:
     authorities: DNSRecords = field(default_factory=DNSRecords)
     additionals: DNSRecords = field(default_factory=DNSRecords)
 
-    edns: Optional[EDNS] = None
+    edns: Optional[DNSExtension] = None
 
     @staticmethod
     def code(value: Union[Enum, int]) -> int:
@@ -582,7 +581,7 @@ class DNSMessage:
             id=self.id, response=True, opcode=self.opcode,
             recursion_desired=self.recursion_desired, rcode=rcode,
             questions=list(self.questions),
-            edns=EDNS() if self.edns is not None else None
+            edns=DNSExtension() if self.edns is not None else None
         )
 
     def pack(self) -> bytes:
@@ -613,7 +612,7 @@ class DNSMessage:
         pointers: Dict[Tuple[bytes, ...], int] = {}
 
         for question in self.questions:
-            DNSName.pack(question.name, message, pointers)
+            DNSRecordName.pack(question.name, message, pointers)
             message += DNSMessage.code(question.type).to_bytes(2, "big")
             message += DNSMessage.classify(question.rclass).to_bytes(2, "big")
 
@@ -635,7 +634,7 @@ class DNSMessage:
         if len(rdata) > 65535:
             raise DNSFormatError(f"The record data is {len(rdata)} bytes, but 65535 is the most a record carries.")
 
-        DNSName.pack(record.name, message, pointers)
+        DNSRecordName.pack(record.name, message, pointers)
         message += DNSMessage.code(record.type).to_bytes(2, "big")
         message += DNSMessage.classify(record.rclass).to_bytes(2, "big")
         message += record.ttl.to_bytes(4, "big")
@@ -674,7 +673,7 @@ class DNSMessage:
         offset = 12
 
         for _ in range(counts[0]):
-            name, offset = DNSName.unpack(raw, offset)
+            name, offset = DNSRecordName.unpack(raw, offset)
 
             if offset + 4 > len(raw):
                 raise DNSFormatError("The message ends in the middle of a question.")
@@ -694,7 +693,7 @@ class DNSMessage:
             raise DNSFormatError(f"The message carries {len(raw) - offset} bytes beyond its last record.")
 
         rcode = flags & 0xF
-        edns: Optional[EDNS] = None
+        edns: Optional[DNSExtension] = None
         kept: List[DNSRecord] = []
 
         for record in additionals:
@@ -705,11 +704,11 @@ class DNSMessage:
             if edns is not None:
                 raise DNSFormatError("The message carries more than one OPT record.")
 
-            if DNSName.key(record.name):
+            if DNSRecordName.key(record.name):
                 raise DNSFormatError("The OPT record must be owned by the root name.")
 
             rcode |= (record.ttl >> 24) << 4
-            edns = EDNS(
+            edns = DNSExtension(
                 payload_size=DNSMessage.classify(record.rclass),
                 version=(record.ttl >> 16) & 0xFF,
                 do=bool(record.ttl & 0x8000),
@@ -719,7 +718,7 @@ class DNSMessage:
         return cls(
             id=int.from_bytes(raw[0:2], "big"),
             response=bool(flags & 0x8000),
-            opcode=DNSOpcode.of((flags >> 11) & 0xF),
+            opcode=DNSOpCode.of((flags >> 11) & 0xF),
             authoritative=bool(flags & 0x0400),
             truncated=bool(flags & 0x0200),
             recursion_desired=bool(flags & 0x0100),
@@ -741,7 +740,7 @@ class DNSMessage:
         records: List[DNSRecord] = []
 
         for _ in range(count):
-            name, offset = DNSName.unpack(raw, offset)
+            name, offset = DNSRecordName.unpack(raw, offset)
 
             if offset + 10 > len(raw):
                 raise DNSFormatError("The message ends in the middle of a record header.")

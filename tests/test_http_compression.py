@@ -7,7 +7,8 @@ import brotlicffi
 import pytest
 import zstandard
 
-from kaede.http.models import HTTPMessage, HTTPHeaders, HTTPLimits
+from kaede.http.models import HTTPMessage, HTTPHeaders
+from kaede.http.api.common import HTTPLimits
 from kaede.http.errors import HTTPError
 from kaede.http.headers import AcceptEncoding
 from kaede.http.helpers.compression import compress, compress_with, decompress

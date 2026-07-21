@@ -1,14 +1,16 @@
-from .handler import DNSConnection
-from .udp import DNSUDPTransport
-from .tcp import DNSTCPTransport
-from .tls import DNSTLSTransport
-from .quic import DNSQUICTransport, DNSStream
+from .common import TRANSPORT_CLOSED, TRANSPORT_TIMEOUT, TRANSPORT_ERRORS
+from .base import DNSConnection, DNSProtocol
+from .udp import DNSUDPConnection, DNSUDPProtocol
+from .tcp import DNSTCPConnection, DNSTCPProtocol
+from .tls import DNSTLSConnection, DNSTLSProtocol
+from .quic import DNSQUICConnection, DNSQUICProtocol
+from .https import DNSHTTPSConnection, DNSHTTPSProtocol
+from .handler import DNSUDPHandler, DNSTCPHandler, DNSTLSHandler, DNSQUICHandler, DNSHTTPSHandler
 
-__all__ = ["DNSConnection", "DNSUDPTransport", "DNSTCPTransport", "DNSTLSTransport", "DNSQUICTransport", "DNSStream"]
-
-def __getattr__(name):
-    if name in ("DNSHTTPSTransport", "DNSHTTPSHandler"):
-        from .https import DNSHTTPSTransport, DNSHTTPSHandler
-        return {"DNSHTTPSTransport": DNSHTTPSTransport, "DNSHTTPSHandler": DNSHTTPSHandler}[name]
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+__all__ = [
+    "TRANSPORT_CLOSED", "TRANSPORT_TIMEOUT", "TRANSPORT_ERRORS", "DNSConnection", "DNSProtocol",
+    "DNSUDPConnection", "DNSUDPProtocol", "DNSTCPConnection", "DNSTCPProtocol",
+    "DNSTLSConnection", "DNSTLSProtocol", "DNSQUICConnection", "DNSQUICProtocol",
+    "DNSHTTPSConnection", "DNSHTTPSProtocol",
+    "DNSUDPHandler", "DNSTCPHandler", "DNSTLSHandler", "DNSQUICHandler", "DNSHTTPSHandler",
+]

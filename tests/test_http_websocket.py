@@ -5,7 +5,7 @@ import pytest
 from kaede.tcp import TCPPort
 from kaede.http.models import HTTPPort
 from kaede.http.errors import WebSocketError
-from kaede.http.websocket import WSFrame, WSConnection, Opcode
+from kaede.http.websocket import WSFrame, WSConnection, WSOpCode
 from kaede.http.api.server import HTTPServer, HTTPServerConfig, HTTPHandler
 from kaede.http.api.client import HTTPClient, HTTPClientConfig
 
@@ -18,12 +18,12 @@ class TestHandshake:
 
 class TestFrames:
     def test_a_short_unmasked_frame(self):
-        frame = WSFrame.build(Opcode.TEXT, b"Hello")
+        frame = WSFrame.build(WSOpCode.TEXT, b"Hello")
 
         assert frame == b"\x81\x05Hello"
 
     def test_a_masked_frame_unmasks_to_the_payload(self):
-        frame = WSFrame.build(Opcode.BINARY, b"payload", mask=True)
+        frame = WSFrame.build(WSOpCode.BINARY, b"payload", mask=True)
 
         assert frame[0] == 0x82
         assert frame[1] & 0x80 # the mask bit
@@ -32,9 +32,9 @@ class TestFrames:
         assert unmasked == b"payload"
 
     def test_length_boundaries(self):
-        assert WSFrame.build(Opcode.BINARY, b"x" * 125)[1] & 0x7F == 125
-        assert WSFrame.build(Opcode.BINARY, b"x" * 126)[1] & 0x7F == 126 # 16-bit length follows
-        assert WSFrame.build(Opcode.BINARY, b"x" * 70000)[1] & 0x7F == 127 # 64-bit length follows
+        assert WSFrame.build(WSOpCode.BINARY, b"x" * 125)[1] & 0x7F == 125
+        assert WSFrame.build(WSOpCode.BINARY, b"x" * 126)[1] & 0x7F == 126 # 16-bit length follows
+        assert WSFrame.build(WSOpCode.BINARY, b"x" * 70000)[1] & 0x7F == 127 # 64-bit length follows
 
 class Stream:
     """An in-memory duplex pair standing in for a transport, so the frame codec
@@ -66,33 +66,33 @@ class Stream:
 class TestReading:
     async def test_a_masked_text_message_is_read(self):
         stream = Stream()
-        stream.load(WSFrame.build(Opcode.TEXT, "hello".encode(), mask=True))
+        stream.load(WSFrame.build(WSOpCode.TEXT, "hello".encode(), mask=True))
 
         ws = WSConnection(("", None), ("", None), transport=stream, server=True)
         assert await ws.read() == "hello"
 
     async def test_a_fragmented_message_reassembles(self):
         stream = Stream()
-        stream.load(WSFrame.build(Opcode.TEXT, b"Hel", fin=False, mask=True))
-        stream.load(WSFrame.build(Opcode.CONTINUATION, b"lo", fin=True, mask=True))
+        stream.load(WSFrame.build(WSOpCode.TEXT, b"Hel", fin=False, mask=True))
+        stream.load(WSFrame.build(WSOpCode.CONTINUATION, b"lo", fin=True, mask=True))
 
         ws = WSConnection(("", None), ("", None), transport=stream, server=True)
         assert await ws.read() == "Hello"
 
     async def test_a_ping_is_answered_with_a_pong(self):
         stream = Stream()
-        stream.load(WSFrame.build(Opcode.PING, b"ka", mask=True))
-        stream.load(WSFrame.build(Opcode.TEXT, b"hi", mask=True))
+        stream.load(WSFrame.build(WSOpCode.PING, b"ka", mask=True))
+        stream.load(WSFrame.build(WSOpCode.TEXT, b"hi", mask=True))
 
         ws = WSConnection(("", None), ("", None), transport=stream, server=True)
         assert await ws.read() == "hi"
 
         fin, opcode, payload, masked = await WSFrame.read(Streamed(stream.sent), limit=1000)
-        assert opcode == Opcode.PONG and payload == b"ka"
+        assert opcode == WSOpCode.PONG and payload == b"ka"
 
     async def test_a_close_frame_ends_the_stream(self):
         stream = Stream()
-        stream.load(WSFrame.build(Opcode.CLOSE, struct.pack(">H", 1000), mask=True))
+        stream.load(WSFrame.build(WSOpCode.CLOSE, struct.pack(">H", 1000), mask=True))
 
         ws = WSConnection(("", None), ("", None), transport=stream, server=True)
         assert await ws.read() is None
@@ -100,7 +100,7 @@ class TestReading:
     async def test_an_unmasked_client_frame_is_rejected(self):
         # RFC 6455 section 5.1.
         stream = Stream()
-        stream.load(WSFrame.build(Opcode.TEXT, b"hi", mask=False))
+        stream.load(WSFrame.build(WSOpCode.TEXT, b"hi", mask=False))
 
         ws = WSConnection(("", None), ("", None), transport=stream, server=True)
 
@@ -119,7 +119,7 @@ class TestReading:
 
     async def test_invalid_utf8_text_is_rejected(self):
         stream = Stream()
-        stream.load(WSFrame.build(Opcode.TEXT, b"\xff\xfe", mask=True))
+        stream.load(WSFrame.build(WSOpCode.TEXT, b"\xff\xfe", mask=True))
 
         ws = WSConnection(("", None), ("", None), transport=stream, server=True)
 

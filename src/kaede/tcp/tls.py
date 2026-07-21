@@ -191,7 +191,7 @@ class TLSConnection:
         if not separator:
             raise ValueError("The separator must not be empty.")
 
-        limit = TCPConnection.buffer_limit if limit is None else limit
+        limit = self.transport.limits.max_buffer_size if limit is None else limit
         start = 0
 
         while True:

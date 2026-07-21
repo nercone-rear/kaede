@@ -5,59 +5,31 @@ import inspect
 from typing import Optional, Union, Callable, Tuple, List
 from dataclasses import dataclass, field
 
-from ...tls import TLSConfig
-from ...protocol import ServerLimits
-from ...tcp import TCPPort, TCPServer, TCPServerConfig, TCPServerLimits, TCPHandler
-from ...udp import UDPPort, UDPServer, UDPServerConfig, UDPServerLimits, UDPHandler
-from ...quic import QUICServer, QUICServerConfig, QUICServerLimits, QUICHandler
-from ...quic.errors import QUICError
+from ...models import ServerLimits, ServerConfig
+from ...tcp import TCPPort, TCPServer, TCPServerConfig, TCPServerLimits
+from ...udp import UDPPort, UDPServer, UDPServerConfig, UDPServerLimits
+from ...quic import QUICServer, QUICServerConfig, QUICServerLimits
 from ..models import DNSPort, DNSResponseCode, DNSMessage
-from ..errors import DNSError, DNSClosedError, DNSConnectionError
-from ..protocol.handler import DNSConnection
-from ..protocol.quic import DNSStream
+from ..errors import DNSError, DNSConnectionError
+from ..protocol.common import TRANSPORT_ERRORS
+from ..protocol.base import DNSConnection
+from ..protocol.https import DNSHTTPSConnection
+from ..protocol.handler import DNSUDPHandler, DNSTCPHandler, DNSTLSHandler, DNSQUICHandler, DNSHTTPSHandler
+from .common import DNSLimits, DNSConfig
 
 @dataclass
-class DNSServerLimits(ServerLimits):
-    pass
-
-@dataclass
-class DNSServerConfig:
-    limits: DNSServerLimits = field(default_factory=lambda: DNSServerLimits())
-
+class DNSServerLimits(DNSLimits, ServerLimits):
     idle_timeout: float = 30.0
 
-    tls: Optional[TLSConfig] = None
-
     handshake_timeout: Optional[float] = 30.0
+
+@dataclass
+class DNSServerConfig(DNSConfig, ServerConfig):
+    limits: DNSServerLimits = field(default_factory=lambda: DNSServerLimits())
 
 class DNSHandler:
     def __init__(self, on_connection: Optional[Callable] = None):
         self.on_connection = on_connection # (connection: DNSConnection) -> None
-
-class DNSExchange:
-    def __init__(self, query: bytes, client: Tuple[str, int] = ("", 0)):
-        self.incoming = bytearray(len(query).to_bytes(2, "big") + query)
-        self.reply: Optional[bytes] = None
-        self.dst = client
-
-    @property
-    def closed(self) -> bool:
-        return self.reply is not None
-
-    async def receive_exactly(self, n: int) -> bytes:
-        if len(self.incoming) < n:
-            raise DNSClosedError("A DoH exchange carries a single query.")
-
-        chunk = bytes(self.incoming[:n])
-        del self.incoming[:n]
-
-        return chunk
-
-    async def send(self, wire: bytes):
-        self.reply = wire[2:]
-
-    async def close(self):
-        return
 
 class DNSServer:
     def __init__(self, *, config: Optional[DNSServerConfig] = None):
@@ -80,12 +52,12 @@ class DNSServer:
 
         for port, server in self.servers:
             for host, bound in server.ports:
-                found.append((host, DNSPort(port.type, bound.value if port.type == "https" else bound, port.secure)))
+                found.append((host, DNSPort(port.type, bound.value if port.type == "https" else bound)))
 
         return found
 
-    def limits(self, kind):
-        return kind(max_connection_nums=self.config.limits.max_connection_nums, max_connection_rate=list(self.config.limits.max_connection_rate))
+    def limits(self, kind, **specific):
+        return kind(max_connection_nums=self.config.limits.max_connection_nums, max_connection_rate=list(self.config.limits.max_connection_rate), idle_timeout=self.config.limits.idle_timeout, **specific)
 
     async def listen(self, handler: DNSHandler, ports: Optional[List[Tuple[str, DNSPort]]] = None, *, reuse_port: bool = False):
         ports = [("0.0.0.0", DNSPort("udp", UDPPort(0))), ("0.0.0.0", DNSPort("tcp", TCPPort(0)))] if ports is None else ports
@@ -110,37 +82,33 @@ class DNSServer:
             raise DNSConnectionError(f"The port {port!r} is not a valid DNS port.")
 
         if port.type == "udp":
-            config = UDPServerConfig(limits=self.limits(UDPServerLimits), idle_timeout=self.config.idle_timeout)
+            config = UDPServerConfig(limits=self.limits(UDPServerLimits))
             server = UDPServer(config)
 
-            await server.listen(UDPHandler(self.datagram), [(host, UDPPort(int(port.value)))], reuse_port=reuse_port)
+            await server.listen(DNSUDPHandler(self), [(host, UDPPort(int(port.value)))], reuse_port=reuse_port)
 
         elif port.type == "tcp":
-            config = TCPServerConfig(limits=self.limits(TCPServerLimits))
+            config = TCPServerConfig(limits=self.limits(TCPServerLimits, handshake_timeout=self.config.limits.handshake_timeout))
 
-            if port.secure:
-                if self.config.tls is None:
-                    raise DNSConnectionError("A DNS over TLS port needs a TLSConfig with a certificate.")
-
+            if self.config.tls:
                 config.tls = self.config.tls
                 config.alpn = ["dot"]
-                config.handshake_timeout = self.config.handshake_timeout
 
             server = TCPServer(config)
 
-            await server.listen(TCPHandler(self.stream), [(host, TCPPort(int(port.value)))], reuse_port=reuse_port)
+            await server.listen(DNSTLSHandler(self) if self.config.tls else DNSTCPHandler(self), [(host, TCPPort(int(port.value)))], reuse_port=reuse_port)
 
         elif port.type == "quic":
             if self.config.tls is None:
                 raise DNSConnectionError("A DNS over QUIC port needs a TLSConfig with a certificate.")
 
             config = QUICServerConfig(
-                limits=self.limits(QUICServerLimits), idle_timeout=self.config.idle_timeout,
-                tls=self.config.tls, alpn=["doq"], handshake_timeout=self.config.handshake_timeout
+                limits=self.limits(QUICServerLimits, handshake_timeout=self.config.limits.handshake_timeout),
+                tls=self.config.tls, alpn=["doq"]
             )
             server = QUICServer(config)
 
-            await server.listen(QUICHandler(self.multiplex), [(host, UDPPort(int(port.value)))], reuse_port=reuse_port)
+            await server.listen(DNSQUICHandler(self), [(host, UDPPort(int(port.value)))], reuse_port=reuse_port)
 
         elif port.type == "https":
             if self.config.tls is None:
@@ -148,15 +116,15 @@ class DNSServer:
 
             from ...http.models import HTTPPort
             from ...http.api.server import HTTPServer, HTTPServerConfig
-            from ..protocol.https import DNSHTTPSHandler
 
             config = HTTPServerConfig(versions=["HTTP/2.0", "HTTP/1.1"])
             config.tls = self.config.tls
-            config.handshake_timeout = self.config.handshake_timeout
+            config.limits.idle_timeout = self.config.limits.idle_timeout
+            config.limits.handshake_timeout = self.config.limits.handshake_timeout
 
             server = HTTPServer(config=config)
 
-            await server.listen(DNSHTTPSHandler(self.resolve), [(host, HTTPPort("tcp", TCPPort(int(port.value)), True))], reuse_port=reuse_port)
+            await server.listen(DNSHTTPSHandler(self), [(host, HTTPPort("tcp", TCPPort(int(port.value))))], reuse_port=reuse_port)
 
         else:
             raise DNSConnectionError(f"The {port.type} transport is not supported.")
@@ -164,38 +132,14 @@ class DNSServer:
         self.servers.append((port, server))
 
     async def resolve(self, query: DNSMessage) -> DNSMessage:
-        exchange = DNSExchange(query.pack())
+        exchange = DNSHTTPSConnection(query.pack())
 
-        await self.converse(DNSConnection(exchange, stream=True, server=True))
+        await self.converse(exchange)
 
         if exchange.reply is None:
             return query.reply(rcode=DNSResponseCode.SERVFAIL)
 
         return DNSMessage.unpack(exchange.reply)
-
-    async def datagram(self, connection):
-        await self.converse(DNSConnection(connection, stream=False, server=True))
-
-    async def stream(self, connection):
-        await self.converse(DNSConnection(connection, stream=True, server=True))
-
-    async def multiplex(self, connection):
-        tasks = set()
-
-        try:
-            while True:
-                stream = await connection.accept(timeout=self.config.idle_timeout)
-
-                task = asyncio.ensure_future(self.confer(DNSConnection(DNSStream(connection, stream), stream=True, server=True)))
-                tasks.add(task)
-                task.add_done_callback(tasks.discard)
-
-        except QUICError:
-            pass
-
-        finally:
-            for task in set(tasks):
-                task.cancel()
 
     async def confer(self, connection: DNSConnection):
         try:
@@ -205,7 +149,7 @@ class DNSServer:
             try:
                 await connection.close()
 
-            except (DNSError, QUICError):
+            except (DNSError,) + TRANSPORT_ERRORS:
                 pass
 
     async def converse(self, connection: DNSConnection):
@@ -227,7 +171,7 @@ class DNSServer:
 
     async def decline(self, connection: DNSConnection):
         while True:
-            query = await connection.receive(timeout=self.config.idle_timeout)
+            query = await connection.receive(timeout=self.config.limits.idle_timeout)
             await connection.send(query.reply(rcode=DNSResponseCode.REFUSED))
 
     async def close(self, timeout: Optional[float] = None):

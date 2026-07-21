@@ -7,29 +7,24 @@ from typing import Optional, List, Dict, Deque, Tuple, Callable
 from collections import deque
 from dataclasses import dataclass, field
 
-from ...tls import TLSConfig
 from ...tls.openssl import TLSContext
 from ...tls.errors import TLSError
-from ...protocol import ServerLimits
+from ...models import ServerLimits, ServerConfig
 from ..models import TCPPort
 from ..errors import TCPError
 from ..protocol import TCPConnection, TCPProtocol
 from ..tls import TLSConnection
+from .common import TCPLimits, TCPConfig
 
 @dataclass
-class TCPServerLimits(ServerLimits):
-    pass
-
-@dataclass
-class TCPServerConfig:
-    limits: TCPServerLimits = field(default_factory=lambda: TCPServerLimits())
-
-    tls: Optional[TLSConfig] = None
-    alpn: Optional[List[str]] = None
-
+class TCPServerLimits(TCPLimits, ServerLimits):
     idle_timeout: Optional[float] = None
 
     handshake_timeout: Optional[float] = 30.0
+
+@dataclass
+class TCPServerConfig(TCPConfig, ServerConfig):
+    limits: TCPServerLimits = field(default_factory=lambda: TCPServerLimits())
 
 class TCPHandler:
     def __init__(self, on_connection: Optional[Callable] = None):
@@ -40,7 +35,7 @@ class TCPGate:
         self.limits = limits
         self.connections = 0
         self.history: Dict[str, Deque[float]] = {}
-        self.history_limit = max(1024, limits.max_connection_nums)
+        self.history_limit = max(limits.max_connection_history, limits.max_connection_nums)
 
     @property
     def window(self) -> float:
@@ -88,7 +83,7 @@ class TCPGate:
 
 class TCPServerProtocol(TCPProtocol):
     def __init__(self, server: "TCPServer", handler: TCPHandler):
-        super().__init__(handler=handler)
+        super().__init__(handler=handler, limits=server.config.limits)
         self.server = server
 
     def connection_made(self, transport: asyncio.Transport):
@@ -121,7 +116,7 @@ class TCPServer:
 
     @property
     def interval(self) -> float:
-        spans = [span for span in (self.gate.window, (self.config.idle_timeout / 4) if self.config.idle_timeout else 0.0) if span]
+        spans = [span for span in (self.gate.window, (self.config.limits.idle_timeout / 4) if self.config.limits.idle_timeout else 0.0) if span]
 
         return max(1.0, min(spans)) if spans else 1.0
 
@@ -167,7 +162,7 @@ class TCPServer:
     async def dispatch(self, connection: TCPConnection):
         try:
             if self.context is not None:
-                connection = await TLSConnection.accept(connection, timeout=self.config.handshake_timeout, context=self.context)
+                connection = await TLSConnection.accept(connection, timeout=self.config.limits.handshake_timeout, context=self.context)
 
             if self.handler is not None and self.handler.on_connection is not None:
                 result = self.handler.on_connection(connection)
@@ -200,8 +195,8 @@ class TCPServer:
     def expire(self, now: Optional[float] = None):
         now = time.monotonic() if now is None else now
 
-        if self.config.idle_timeout is not None:
-            for connection in [c for c in self.connections if now - c.active > self.config.idle_timeout]:
+        if self.config.limits.idle_timeout is not None:
+            for connection in [c for c in self.connections if now - c.active > self.config.limits.idle_timeout]:
                 connection.drop()
 
         self.gate.sweep(now)

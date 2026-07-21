@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 
-from ...protocol import ServerLimits
+from ...models import ServerLimits
+from .common import SMTPLimits
 
 @dataclass
-class SMTPServerLimits(ServerLimits):
+class SMTPServerLimits(SMTPLimits, ServerLimits):
     pass

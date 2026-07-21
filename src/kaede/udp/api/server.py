@@ -8,31 +8,26 @@ from typing import Optional, List, Dict, Deque, Tuple, Callable
 from collections import deque
 from dataclasses import dataclass, field
 
-from ...tls import TLSConfig
 from ...tls.openssl import TLSContext, Cookies
 from ...tls.errors import TLSError
-from ...protocol import ServerLimits
+from ...models import ServerLimits, ServerConfig
 from ..models import UDPPort
 from ..errors import UDPError
 from ..protocol import UDPConnection, UDPProtocol
 from ..tls import DTLSConnection
+from .common import UDPLimits, UDPConfig
 
 @dataclass
-class UDPServerLimits(ServerLimits):
-    pass
-
-@dataclass
-class UDPServerConfig:
-    limits: UDPServerLimits = field(default_factory=lambda: UDPServerLimits())
-
+class UDPServerLimits(UDPLimits, ServerLimits):
     idle_timeout: float = 30.0
 
-    tls: Optional[TLSConfig] = None
-    alpn: Optional[List[str]] = None
+    handshake_timeout: Optional[float] = 30.0
+
+@dataclass
+class UDPServerConfig(UDPConfig, ServerConfig):
+    limits: UDPServerLimits = field(default_factory=lambda: UDPServerLimits())
 
     cookies: bool = True
-
-    handshake_timeout: Optional[float] = 30.0
 
 class UDPHandler:
     def __init__(self, on_connection: Optional[Callable] = None):
@@ -43,7 +38,7 @@ class UDPGate:
         self.limits = limits
         self.connections = 0
         self.history: Dict[str, Deque[float]] = {}
-        self.history_limit = max(1024, limits.max_connection_nums)
+        self.history_limit = max(limits.max_connection_history, limits.max_connection_nums)
 
     @property
     def window(self) -> float:
@@ -120,7 +115,7 @@ class UDPServer:
 
     @property
     def interval(self) -> float:
-        return max(1.0, self.config.idle_timeout / 4)
+        return max(1.0, self.config.limits.idle_timeout / 4)
 
     async def listen(self, handler: UDPHandler, ports: Optional[List[Tuple[str, UDPPort]]] = None, *, reuse_port: bool = False, sockets: Optional[List[socket.socket]] = None):
         ports = [("0.0.0.0", UDPPort(0))] if ports is None else ports
@@ -192,7 +187,7 @@ class UDPServer:
 
         try:
             if self.context is not None:
-                served = await DTLSConnection.accept(connection, timeout=self.config.handshake_timeout, context=self.context)
+                served = await DTLSConnection.accept(connection, timeout=self.config.limits.handshake_timeout, context=self.context)
 
             if self.handler is not None and self.handler.on_connection is not None:
                 result = self.handler.on_connection(served)
@@ -226,7 +221,7 @@ class UDPServer:
     def expire(self, now: Optional[float] = None):
         now = time.monotonic() if now is None else now
 
-        for connection in [c for c in self.connections if now - c.active > self.config.idle_timeout]:
+        for connection in [c for c in self.connections if now - c.active > self.config.limits.idle_timeout]:
             connection.drop()
 
         self.gate.sweep(now)

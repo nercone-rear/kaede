@@ -5,7 +5,7 @@ import pytest
 from kaede.tls import TLSConfig
 from kaede.tls.errors import TLSConfigError, TLSVerificationError, TLSError
 from kaede.udp.models import UDPPort
-from kaede.quic import QUICClient, QUICClientConfig, QUICServer, QUICServerConfig, QUICHandler
+from kaede.quic import QUICClient, QUICClientConfig, QUICClientLimits, QUICServer, QUICServerConfig, QUICHandler
 from kaede.quic.tls import QTLS
 
 LOCAL = "127.0.0.1"
@@ -31,13 +31,13 @@ async def upper(connection):
 class Running:
     """A QUICServer on an ephemeral port."""
 
-    def __init__(self, certificate, *, alpn=None, ech_pemfiles=None):
+    def __init__(self, certificate, *, alpn=None, echfile=None):
         certfile, keyfile = certificate
 
         config = QUICServerConfig()
-        config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, ech_pemfiles=ech_pemfiles or [])
+        config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, echfile=echfile)
         config.alpn = ["kaede/1"] if alpn is None else alpn
-        config.handshake_timeout = 10
+        config.limits.handshake_timeout = 10
 
         self.server = QUICServer(config)
 
@@ -49,7 +49,7 @@ class Running:
         await self.server.close(timeout=3)
 
 def configured(authority, *, alpn=None, hostname="localhost", verify=True, ech=None) -> QUICClientConfig:
-    config = QUICClientConfig(connect_timeout=10)
+    config = QUICClientConfig(limits=QUICClientLimits(timeout_connection=10))
     config.tls = TLSConfig(cafile=authority.ca) if verify else TLSConfig(verify_mode=CERT_NONE)
     config.alpn = ["kaede/1"] if alpn is None else alpn
     config.hostname = hostname
@@ -175,7 +175,7 @@ class TestVerification:
 
 class TestECH:
     async def test_a_real_connection_encrypts_the_client_hello(self, server_certificate, authority, ech_keys):
-        async with Running(server_certificate, ech_pemfiles=[ech_keys.pemfile]) as server:
+        async with Running(server_certificate, echfile=ech_keys.pemfile) as server:
             async with QUICClient(server.ports[0], config=configured(authority, ech=ech_keys.configlist)) as connection:
                 assert await ask(connection, b"hello") == b"HELLO"
 

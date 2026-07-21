@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from kaede.dns.models import DNSMessage, DNSName
+from kaede.dns.models import DNSMessage, DNSRecordName
 from kaede.dns.errors import DNSError
 from kaede.http.models import HTTPHeaders
 from kaede.http.helpers.hpack import HPACKDecoder, HPACKError, Huffman
@@ -19,12 +19,12 @@ def corpus_dns() -> bytes:
     message = DNSMessage(id=0x1234, response=True)
     message.questions.append(__import__("kaede.dns", fromlist=["DNSQuestion"]).DNSQuestion("www.example.com"))
 
-    from kaede.dns import DNSRecord, DNSRecordType, EDNS
+    from kaede.dns import DNSRecord, DNSRecordType, DNSExtension
     from kaede.dns.records import ARecordData
     import ipaddress
 
     message.answers.append(DNSRecord("www.example.com", DNSRecordType.A, ARecordData(ipaddress.IPv4Address("192.0.2.1")), ttl=300))
-    message.edns = EDNS()
+    message.edns = DNSExtension()
 
     return message.pack()
 
@@ -75,7 +75,7 @@ class TestDNSFuzzing:
             data = bytes(rng.randrange(256) for _ in range(rng.randint(1, 48)))
 
             try:
-                DNSName.unpack(data, 0)
+                DNSRecordName.unpack(data, 0)
 
             except DNSError:
                 pass

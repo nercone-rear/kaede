@@ -3,7 +3,7 @@ import os
 import pytest
 
 from kaede.quic.tls import QTLS
-from kaede.http.api.client import HTTPClient, HTTPClientConfig
+from kaede.http.api.client import HTTPClient, HTTPClientConfig, HTTPClientLimits
 
 pytestmark = [
     pytest.mark.network,
@@ -11,7 +11,7 @@ pytestmark = [
 ]
 
 def client(versions) -> HTTPClient:
-    return HTTPClient(config=HTTPClientConfig(versions=list(versions), connect_timeout=15))
+    return HTTPClient(config=HTTPClientConfig(versions=list(versions), limits=HTTPClientLimits(timeout_connection=15)))
 
 class TestH1:
     async def test_plain_http(self):

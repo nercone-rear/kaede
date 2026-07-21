@@ -1,36 +1,48 @@
 import asyncio
 import secrets
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, TYPE_CHECKING
 
 from ...tcp import TCPPort, TCPConnection
 from ...tcp.errors import TCPError
 from ...tls.errors import TLSError
 from ..models import DNSMessage
 from ..errors import DNSError, DNSFormatError, DNSConnectionError, DNSClosedError
-from .handler import DNSConnection, DNSTransport
+from .base import DNSConnection, DNSProtocol
 
-class DNSTCPTransport(DNSTransport):
-    def __init__(self, dst: Tuple[str, int], *, connect_timeout: float = 5.0):
+if TYPE_CHECKING:
+    from ..api.client import DNSClientLimits
+
+class DNSTCPConnection(DNSConnection):
+    def __init__(self, transport, *, server: bool = False):
+        super().__init__(transport, stream=True, server=server)
+
+class DNSTCPProtocol(DNSProtocol):
+    carrier = DNSTCPConnection
+
+    def __init__(self, dst: Tuple[str, int], *, limits: Optional["DNSClientLimits"] = None):
+        from ..api.client import DNSClientLimits
+
         self.dst = dst
-        self.connect_timeout = connect_timeout
+        self.limits = limits or DNSClientLimits()
 
         self.connection: Optional[DNSConnection] = None
         self.lock = asyncio.Lock()
 
     async def open(self):
         connection = TCPConnection(("", TCPPort(0)), (self.dst[0], TCPPort(self.dst[1])))
-        await connection.connect(self.connect_timeout)
+        await connection.connect(self.limits.timeout_connection)
 
         return connection
 
     async def establish(self) -> DNSConnection:
         try:
-            return DNSConnection(await self.open(), stream=True)
+            return self.carrier(await self.open())
 
         except (TCPError, TLSError) as e:
             raise DNSConnectionError(f"Could not reach {self.dst[0]}:{self.dst[1]}: {e}") from e
 
-    async def query(self, message: DNSMessage, *, timeout: float = 3.0) -> DNSMessage:
+    async def query(self, message: DNSMessage, *, timeout: Optional[float] = None) -> DNSMessage:
+        timeout = self.limits.timeout_query if timeout is None else timeout
         message.id = secrets.randbits(16)
 
         async with self.lock:

@@ -7,7 +7,7 @@ import pytest
 from kaede.tls import TLSConfig, TLSCipher
 from kaede.tls.errors import TLSError, TLSVerificationError
 from kaede.udp import UDPPort, UDPClient, UDPServer, UDPServerConfig, UDPHandler
-from kaede.udp.api.client import UDPClientConfig
+from kaede.udp.api.client import UDPClientConfig, UDPClientLimits
 from kaede.udp.errors import UDPClosedError, UDPLimitError
 
 from .conftest import Authority
@@ -25,10 +25,11 @@ class Running:
     def __init__(self, on_connection, certificate, *, alpn=None, idle_timeout=10):
         certfile, keyfile = certificate
 
-        config = UDPServerConfig(idle_timeout=idle_timeout)
+        config = UDPServerConfig()
+        config.limits.idle_timeout = idle_timeout
         config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE)
         config.alpn = alpn
-        config.handshake_timeout = 10
+        config.limits.handshake_timeout = 10
 
         self.server = UDPServer(config)
         self.handler = UDPHandler(on_connection)
@@ -41,7 +42,7 @@ class Running:
         await self.server.close(timeout=3)
 
 def client(server, authority, *, alpn=None, hostname="localhost", verify=True):
-    config = UDPClientConfig(connect_timeout=10)
+    config = UDPClientConfig(limits=UDPClientLimits(timeout_connection=10))
     config.tls = TLSConfig(cafile=authority.ca) if verify else TLSConfig(verify_mode=CERT_NONE)
     config.alpn = alpn
     config.hostname = hostname
@@ -210,7 +211,7 @@ class Lossy(asyncio.DatagramProtocol):
             self.transport.sendto(data, target)
 
 def through(relay, authority):
-    config = UDPClientConfig(connect_timeout=30)
+    config = UDPClientConfig(limits=UDPClientLimits(timeout_connection=30))
     config.tls = TLSConfig(cafile=authority.ca)
     config.hostname = "localhost"
 
@@ -247,7 +248,7 @@ class TestLoss:
 class TestVerification:
     async def test_rejects_a_certificate_from_an_unknown_ca(self, server_certificate):
         async with Running(upper, server_certificate) as server:
-            config = UDPClientConfig(connect_timeout=10)
+            config = UDPClientConfig(limits=UDPClientLimits(timeout_connection=10))
             config.tls = TLSConfig()  # the system trust store, which lacks the test CA
 
             with pytest.raises(TLSVerificationError):
@@ -275,7 +276,7 @@ class TestVerification:
 
     async def test_a_rejected_handshake_does_not_stop_the_server(self, server_certificate, authority):
         async with Running(upper, server_certificate) as server:
-            config = UDPClientConfig(connect_timeout=10)
+            config = UDPClientConfig(limits=UDPClientLimits(timeout_connection=10))
             config.tls = TLSConfig()
 
             with pytest.raises(TLSVerificationError):
@@ -288,7 +289,7 @@ class TestVerification:
 
     async def test_a_failed_handshake_is_not_kept_as_a_connection(self, server_certificate):
         async with Running(upper, server_certificate) as server:
-            config = UDPClientConfig(connect_timeout=10)
+            config = UDPClientConfig(limits=UDPClientLimits(timeout_connection=10))
             config.tls = TLSConfig()
 
             failing = UDPClient(server.ports[0], config=config)
@@ -437,7 +438,7 @@ class TestInteroperability:
         try:
             await asyncio.sleep(1.0)  # let s_server bind
 
-            config = UDPClientConfig(connect_timeout=20)
+            config = UDPClientConfig(limits=UDPClientLimits(timeout_connection=20))
             config.tls = TLSConfig(cafile=authority.ca)
             config.hostname = "localhost"
 

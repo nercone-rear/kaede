@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from kaede.uds import UDSAddress, UDSConnection, UDSProtocol
+from kaede.uds import UDSPort, UDSConnection, UDSProtocol, UDSLimits
 from kaede.uds.errors import UDSConnectionError, UDSClosedError, UDSTimeoutError, UDSBusyError, UDSLimitError
 
 # The peer in these tests is the standard library's asyncio unix server rather
@@ -32,7 +32,7 @@ class Server:
         return self.path
 
 def connection(server) -> UDSConnection:
-    return UDSConnection(UDSAddress(""), server.address)
+    return UDSConnection(UDSPort(""), server.address)
 
 async def echo(reader, writer):
     while True:
@@ -46,7 +46,7 @@ async def echo(reader, writer):
 
 @pytest.fixture
 def socket_path(uds_dir):
-    return UDSAddress(os.path.join(uds_dir, "kaede.sock"))
+    return UDSPort(os.path.join(uds_dir, "kaede.sock"))
 
 class TestRoundTrip:
     async def test_sends_and_receives(self, socket_path):
@@ -169,7 +169,7 @@ class TestReceive:
 
     async def test_receive_exactly_beyond_the_buffer_limit(self, socket_path):
         # A request larger than buffer_limit must not deadlock against flow control.
-        size = UDSConnection.buffer_limit * 4
+        size = UDSLimits().max_buffer_size * 4
         payload = b"K" * size
 
         async def send(reader, writer):
@@ -292,7 +292,7 @@ class TestHalfClose:
 
 class TestErrors:
     async def test_connecting_to_a_missing_path_is_refused(self, socket_path):
-        uds = UDSConnection(UDSAddress(""), socket_path)  # nothing is listening there
+        uds = UDSConnection(UDSPort(""), socket_path)  # nothing is listening there
 
         with pytest.raises(UDSConnectionError):
             await uds.connect()
@@ -307,7 +307,7 @@ class TestErrors:
         loop = asyncio.get_running_loop()
         monkeypatch.setattr(loop, "create_unix_connection", stall)
 
-        uds = UDSConnection(UDSAddress(""), socket_path)
+        uds = UDSConnection(UDSPort(""), socket_path)
 
         with pytest.raises(UDSTimeoutError):
             await uds.connect(timeout=0.05)
@@ -323,7 +323,7 @@ class TestErrors:
             await uds.close()
 
     async def test_sending_before_connecting_is_rejected(self, socket_path):
-        uds = UDSConnection(UDSAddress(""), socket_path)
+        uds = UDSConnection(UDSPort(""), socket_path)
 
         with pytest.raises(UDSClosedError):
             await uds.send(b"early")
@@ -360,7 +360,7 @@ class TestErrors:
             await uds.close()
 
     async def test_close_without_connecting_is_harmless(self, socket_path):
-        uds = UDSConnection(UDSAddress(""), socket_path)
+        uds = UDSConnection(UDSPort(""), socket_path)
         await uds.close()
 
 class TestServerSide:

@@ -1,19 +1,22 @@
 from typing import Optional, List, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from ...models import ClientLimits, ClientConfig
 from ...tls import TLSConfig
 from ...udp.models import UDPPort
 from ...udp.protocol import UDPConnection
 from ..tls import QUICContext
 from ..protocol import QUICConnection
+from .common import QUICLimits, QUICConfig
 
 @dataclass
-class QUICClientConfig:
-    connect_timeout: Optional[float] = 30.0
+class QUICClientLimits(QUICLimits, ClientLimits):
+    pass
 
-    tls: Optional[TLSConfig] = None
+@dataclass
+class QUICClientConfig(QUICConfig, ClientConfig):
+    limits: QUICClientLimits = field(default_factory=lambda: QUICClientLimits())
 
-    alpn: Optional[List[str]] = None
     hostname: Optional[str] = None
     ech: Optional[bytes] = None
 
@@ -37,10 +40,10 @@ class QUICClient:
         src = self.src if src is None else UDPPort(src)
 
         transport = UDPConnection(("", src), (dst[0], UDPPort(dst[1])))
-        await transport.connect(self.config.connect_timeout)
+        await transport.connect(self.config.limits.timeout_connection)
 
         try:
-            connection = await QUICConnection.connect(transport, hostname=hostname or self.config.hostname or dst[0], ech=ech or self.config.ech, timeout=self.config.connect_timeout, context=self.context)
+            connection = await QUICConnection.connect(transport, hostname=hostname or self.config.hostname or dst[0], ech=ech or self.config.ech, timeout=self.config.limits.timeout_connection, context=self.context)
 
         except BaseException:
             await transport.close()
@@ -48,11 +51,17 @@ class QUICClient:
 
         self.connections = [kept for kept in self.connections if not kept.closed]
         self.connections.append(connection)
+
+        while len(self.connections) > self.config.limits.max_connection_keep:
+            kept = self.connections.pop(0)
+            await kept.close(timeout=self.config.limits.close_timeout)
+            await kept.endpoint.close()
+
         return connection
 
     async def close(self):
         connections, self.connections = self.connections, []
 
         for connection in connections:
-            await connection.close()
+            await connection.close(timeout=self.config.limits.close_timeout)
             await connection.endpoint.close()

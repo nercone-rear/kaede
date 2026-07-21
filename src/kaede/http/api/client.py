@@ -10,28 +10,30 @@ from ...tls.errors import TLSError
 from ...tcp import TCPPort, TCPConnection, TLSConnection
 from ...tcp.errors import TCPError
 from ...udp import UDPPort
-from ...quic import QUICClient, QUICClientConfig
+from ...quic import QUICClient, QUICClientConfig, QUICClientLimits
 from ...quic.errors import QUICError
-from ..models import HTTPVersion, HTTPMethod, HTTPBroadRole, HTTPRole, HTTPPort, HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse, HTTPLimits
+from ...models import ClientLimits, ClientConfig
+from ..models import HTTPMethod, HTTPBroadRole, HTTPRole, HTTPPort, HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
 from ..errors import HTTPError
 from ..headers import CommaHeader
 from ..protocol import HTTPConnection, H1Connection
-from ..protocol.h2 import H2Session
-from ..protocol.h3 import H3Session, Code as H3Code
+from ..protocol.h2 import H2Protocol
+from ..protocol.h3 import H3Protocol, Code as H3Code
 from ..finalizer import finalize_request
 from ..helpers.hsts import HSTSStore
 from ..websocket import WSConnection
+from .common import HTTPLimits, HTTPConfig
 
 @dataclass
-class HTTPClientConfig:
-    versions: List[HTTPVersion] = field(default_factory=lambda: ["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"])
+class HTTPClientLimits(HTTPLimits, ClientLimits):
+    pass
 
-    limits: HTTPLimits = field(default_factory=lambda: HTTPLimits())
+@dataclass
+class HTTPClientConfig(HTTPConfig, ClientConfig):
+    limits: HTTPClientLimits = field(default_factory=lambda: HTTPClientLimits())
 
     tls: Union[TLSConfig, Dict[str, TLSConfig]] = field(default_factory=lambda: TLSConfig()) # TLSConfig or {hostname: TLSConfig, ...}
     ech: Union[None, bytes, Dict[str, bytes]] = None # List[ECHConfig] or {hostname: List[ECHConfig], ...}
-
-    connect_timeout: Optional[float] = 30.0
 
     hsts: bool = True
 
@@ -44,8 +46,9 @@ class HTTPClient:
 
         self.store = HSTSStore() if self.config.hsts else None
         self.connections: List[HTTPConnection] = []
-        self.sessions: Dict[Tuple[str, int, bool], Tuple[H2Session, "asyncio.Future"]] = {}
-        self.tunnels: Dict[Tuple[str, int], Tuple[QUICClient, H3Session, "asyncio.Future"]] = {}
+        self.sessions: Dict[Tuple[str, int, bool], Tuple[H2Protocol, "asyncio.Future"]] = {}
+        self.tunnels: Dict[Tuple[str, int], Tuple[QUICClient, H3Protocol, "asyncio.Future"]] = {}
+        self.held: Dict[Tuple[str, int, bool], Union[TCPConnection, TLSConnection]] = {}
 
     @property
     def only_h3(self) -> bool:
@@ -96,7 +99,7 @@ class HTTPClient:
             self.store.learn(host, header, secure=secure)
 
     async def request(self, method: HTTPMethod, url: Union[URL, str], *, headers=None, cookies: Optional[Dict[str, str]] = None, body: Optional[Union[bytes, str]] = None, timeout: Optional[float] = None) -> HTTPConnection:
-        url = self.upgrade(URL.parse(url) if isinstance(url, str) else url)
+        url = self.upgrade(URL.parse_absolute(target=url) if isinstance(url, str) else url)
         secure = url.scheme in ("https", "wss")
 
         host = url.host
@@ -137,7 +140,7 @@ class HTTPClient:
 
         return connection
 
-    async def session(self, host: str, port: int, secure: bool, timeout: Optional[float]) -> Optional[H2Session]:
+    async def session(self, host: str, port: int, secure: bool, timeout: Optional[float]) -> Optional[H2Protocol]:
         key = (host, port, secure)
         kept = self.sessions.get(key)
 
@@ -156,7 +159,7 @@ class HTTPClient:
             self.hold(host, port, secure, transport)
             return None
 
-        session = H2Session(transport, role=HTTPBroadRole.CLIENT, limits=self.config.limits, observer=lambda message: self.notice(host, secure, message))
+        session = H2Protocol(transport, role=HTTPBroadRole.CLIENT, limits=self.config.limits, observer=lambda message: self.notice(host, secure, message))
         await session.start()
         pump = asyncio.ensure_future(session.pump())
 
@@ -168,7 +171,7 @@ class HTTPClient:
             from ..headers import Cookie
             request.headers.set("Cookie", Cookie(dict(cookies)).build())
 
-    async def tunnel(self, host: str, port: int, timeout: Optional[float]) -> H3Session:
+    async def tunnel(self, host: str, port: int, timeout: Optional[float]) -> H3Protocol:
         key = (host, port)
         kept = self.tunnels.get(key)
 
@@ -183,7 +186,7 @@ class HTTPClient:
             await kept[0].close()
 
         client = QUICClient((host, UDPPort(port)), config=QUICClientConfig(
-            connect_timeout=timeout if timeout is not None else self.config.connect_timeout,
+            limits=QUICClientLimits(timeout_connection=timeout if timeout is not None else self.config.limits.timeout_connection),
             tls=self.credentials(host), alpn=["h3"], hostname=host, ech=self.ech(host)
         ))
 
@@ -194,14 +197,14 @@ class HTTPClient:
             await client.close()
             raise HTTPError(502, f"Could not reach {host}:{port} over HTTP/3: {e}")
 
-        session = H3Session(connection, role=HTTPBroadRole.CLIENT, limits=self.config.limits, observer=lambda message: self.notice(host, True, message))
+        session = H3Protocol(connection, role=HTTPBroadRole.CLIENT, limits=self.config.limits, observer=lambda message: self.notice(host, True, message))
         await session.start()
         reader = asyncio.ensure_future(self.overhear(session))
 
         self.tunnels[key] = (client, session, reader)
         return session
 
-    async def overhear(self, session: H3Session):
+    async def overhear(self, session: H3Protocol):
         tasks = set()
 
         try:
@@ -233,7 +236,7 @@ class HTTPClient:
 
     async def open(self, host: str, port: int, secure: bool, timeout: Optional[float], *, alpn: List[str]):
         transport = TCPConnection(("", TCPPort(0)), (host, TCPPort(port)))
-        connect_timeout = timeout if timeout is not None else self.config.connect_timeout
+        connect_timeout = timeout if timeout is not None else self.config.limits.timeout_connection
 
         try:
             await transport.connect(connect_timeout)
@@ -253,19 +256,18 @@ class HTTPClient:
         return transport
 
     def hold(self, host: str, port: int, secure: bool, transport):
-        self.held = getattr(self, "held", {})
         self.held[(host, port, secure)] = transport
 
     async def connect(self, host: str, port: int, secure: bool, timeout: Optional[float]) -> H1Connection:
-        transport = getattr(self, "held", {}).pop((host, port, secure), None) if hasattr(self, "held") else None
+        transport = self.held.pop((host, port, secure), None)
 
         if transport is None or transport.closed:
             transport = await self.open(host, port, secure, timeout, alpn=["http/1.1"] if secure else [])
 
         version = "HTTP/1.1" if "HTTP/1.1" in self.config.versions else "HTTP/1.0"
 
-        src = ("", HTTPPort("tcp", TCPPort(0), secure))
-        dst = (host, HTTPPort("tcp", TCPPort(port), secure))
+        src = ("", HTTPPort("tcp", TCPPort(0)))
+        dst = (host, HTTPPort("tcp", TCPPort(port)))
 
         connection = H1Connection(src, dst, transport=transport, role=HTTPBroadRole.CLIENT, version=version, limits=self.config.limits, observer=lambda message: self.notice(host, secure, message))
 
@@ -299,7 +301,7 @@ class HTTPClient:
         import os
         from base64 import b64encode
 
-        url = self.upgrade(URL.parse(url) if isinstance(url, str) else url)
+        url = self.upgrade(URL.parse_absolute(target=url) if isinstance(url, str) else url)
         secure = url.scheme in ("wss", "https")
         host = url.host
         port = url.port or (443 if secure else 80)
@@ -329,8 +331,6 @@ class HTTPClient:
             await transport.close()
             raise HTTPError(502, f"The WebSocket handshake failed: {e}")
 
-        from ..websocket import WSFrame
-
         try:
             self.validate(status, response, key, subprotocols)
 
@@ -338,7 +338,7 @@ class HTTPClient:
             await transport.close()
             raise
 
-        return WSConnection(("", None), (host, None), transport=transport, server=False, subprotocol=response.get("sec-websocket-protocol"))
+        return WSConnection(("", None), (host, None), transport=transport, server=False, subprotocol=response.get("sec-websocket-protocol"), limits=self.config.limits)
 
     def validate(self, status: int, response: HTTPHeaders, key: str, subprotocols) -> None:
         from ..websocket import WSFrame
@@ -400,7 +400,7 @@ class HTTPClient:
             await session.shutdown()
             await client.close()
 
-        for transport in getattr(self, "held", {}).values():
-            await transport.close()
+        held, self.held = self.held, {}
 
-        self.held = {}
+        for transport in held.values():
+            await transport.close()

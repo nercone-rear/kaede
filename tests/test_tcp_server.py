@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from kaede.tcp import TCPPort, TCPClient, TCPServer, TCPServerConfig, TCPServerLimits, TCPHandler
-from kaede.tcp.api.client import TCPClientConfig
+from kaede.tcp.api.client import TCPClientConfig, TCPClientLimits
 from kaede.tcp.errors import TCPClosedError
 
 LOCAL = "127.0.0.1"
@@ -308,7 +308,7 @@ class TestClient:
             TCPClient((LOCAL, TCPPort(70000)))
 
     async def test_the_connect_timeout_is_configurable(self):
-        config = TCPClientConfig(connect_timeout=0.05)
+        config = TCPClientConfig(limits=TCPClientLimits(timeout_connection=0.05))
         client = TCPClient(("203.0.113.1", TCPPort(80)), config=config)  # TEST-NET-3, unroutable
 
         with pytest.raises(Exception):
@@ -326,7 +326,7 @@ class TestIdle:
             await connection.receive(1)  # blocks until the reaper drops the connection
             woken.set()
 
-        server = TCPServer(TCPServerConfig(idle_timeout=0.05))
+        server = TCPServer(TCPServerConfig(limits=TCPServerLimits(idle_timeout=0.05)))
         await server.listen(TCPHandler(stall), [(LOCAL, TCPPort(0))])
 
         try:
@@ -343,7 +343,7 @@ class TestIdle:
         async def hold(connection):
             await connection.receive(1)
 
-        server = TCPServer(TCPServerConfig(idle_timeout=100.0))
+        server = TCPServer(TCPServerConfig(limits=TCPServerLimits(idle_timeout=100.0)))
         await server.listen(TCPHandler(hold), [(LOCAL, TCPPort(0))])
 
         try:

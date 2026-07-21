@@ -18,7 +18,7 @@ class Running:
             config.limits = limits
 
         if idle_timeout is not None:
-            config.idle_timeout = idle_timeout
+            config.limits.idle_timeout = idle_timeout
 
         self.server = UDPServer(config)
         self.handler = UDPHandler(on_connection)
@@ -247,11 +247,11 @@ class TestIdleExpiry:
                 assert await talker.ask(b"again", address) == b"AGAIN"
 
     async def test_the_sweep_interval_follows_the_idle_timeout(self):
-        server = UDPServer(UDPServerConfig(idle_timeout=40))
+        server = UDPServer(UDPServerConfig(limits=UDPServerLimits(idle_timeout=40)))
         assert server.interval == 10
 
         # It must never spin, however short the timeout is set.
-        assert UDPServer(UDPServerConfig(idle_timeout=0.1)).interval == 1.0
+        assert UDPServer(UDPServerConfig(limits=UDPServerLimits(idle_timeout=0.1))).interval == 1.0
 
 class TestLimits:
     async def test_refuses_peers_beyond_the_count_limit(self):

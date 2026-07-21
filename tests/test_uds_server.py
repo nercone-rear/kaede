@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from kaede.uds import UDSAddress, UDSClient, UDSServer, UDSServerConfig, UDSServerLimits, UDSHandler
-from kaede.uds.api.client import UDSClientConfig
+from kaede.uds import UDSPort, UDSClient, UDSServer, UDSServerConfig, UDSServerLimits, UDSHandler
+from kaede.uds.api.client import UDSClientConfig, UDSClientLimits
 from kaede.uds.errors import UDSClosedError
 
 class Running:
@@ -30,7 +30,7 @@ class Running:
 
 @pytest.fixture
 def socket_path(uds_dir):
-    return UDSAddress(os.path.join(uds_dir, "kaede.sock"))
+    return UDSPort(os.path.join(uds_dir, "kaede.sock"))
 
 async def upper(connection):
     data = await connection.receive_exactly(5)
@@ -89,8 +89,8 @@ class TestServing:
             assert stat.S_IMODE(os.stat(str(socket_path)).st_mode) == 0o600
 
     async def test_listens_on_several_paths(self, uds_dir):
-        first = UDSAddress(os.path.join(uds_dir, "a.sock"))
-        second = UDSAddress(os.path.join(uds_dir, "b.sock"))
+        first = UDSPort(os.path.join(uds_dir, "a.sock"))
+        second = UDSPort(os.path.join(uds_dir, "b.sock"))
 
         server = UDSServer()
 
@@ -105,8 +105,8 @@ class TestServing:
         # If create_unix_server fails for one of several paths, every socket
         # bound so far -- attached or not -- must be closed and unlinked, and
         # the server must be left with no partially-attached state.
-        first = UDSAddress(os.path.join(uds_dir, "a.sock"))
-        second = UDSAddress(os.path.join(uds_dir, "b.sock"))
+        first = UDSPort(os.path.join(uds_dir, "a.sock"))
+        second = UDSPort(os.path.join(uds_dir, "b.sock"))
 
         server = UDSServer()
         loop = asyncio.get_running_loop()
@@ -330,10 +330,10 @@ class TestClient:
 
     async def test_rejects_a_path_beyond_the_limit(self):
         with pytest.raises(ValueError):
-            UDSClient(UDSAddress("/" + "a" * UDSAddress.limit))
+            UDSClient(UDSPort("/" + "a" * UDSPort.limit))
 
     async def test_rejects_connecting_to_a_missing_socket(self, uds_dir):
-        client = UDSClient(UDSAddress(os.path.join(uds_dir, "nobody-home.sock")))
+        client = UDSClient(UDSPort(os.path.join(uds_dir, "nobody-home.sock")))
 
         with pytest.raises(Exception):
             await client.open()
@@ -345,7 +345,7 @@ class TestClient:
         loop = asyncio.get_running_loop()
         monkeypatch.setattr(loop, "create_unix_connection", stall)
 
-        config = UDSClientConfig(connect_timeout=0.05)
+        config = UDSClientConfig(limits=UDSClientLimits(timeout_connection=0.05))
         client = UDSClient(socket_path, config=config)
 
         with pytest.raises(Exception):
@@ -363,7 +363,7 @@ class TestIdle:
             await connection.receive(1)  # blocks until the reaper drops the connection
             woken.set()
 
-        async with Running(socket_path, stall, config=UDSServerConfig(idle_timeout=0.05)) as server:
+        async with Running(socket_path, stall, config=UDSServerConfig(limits=UDSServerLimits(idle_timeout=0.05))) as server:
             async with UDSClient(socket_path):
                 await asyncio.sleep(0.15)
                 server.expire()
@@ -374,7 +374,7 @@ class TestIdle:
         async def hold(connection):
             await connection.receive(1)
 
-        async with Running(socket_path, hold, config=UDSServerConfig(idle_timeout=100.0)) as server:
+        async with Running(socket_path, hold, config=UDSServerConfig(limits=UDSServerLimits(idle_timeout=100.0))) as server:
             async with UDSClient(socket_path):
                 await asyncio.sleep(0.1)
                 server.expire()

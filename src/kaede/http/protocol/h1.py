@@ -1,5 +1,5 @@
-import os
-from typing import Optional, Union, List, Tuple
+import inspect
+from typing import Optional, Tuple
 from collections.abc import AsyncIterator
 
 from ...url import URL
@@ -7,26 +7,27 @@ from ...constants import Digits
 from ...tcp.errors import TCPError, TCPClosedError, TCPLostError, TCPLimitError, TCPTimeoutError
 from ...uds.errors import UDSError, UDSClosedError, UDSLostError, UDSLimitError, UDSTimeoutError
 from ...tls.errors import TLSError
-from ..models import HTTPBroadRole, HTTPRole, HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
+from ..models import HTTPBroadRole, HTTPHeaders, HTTPMessage, HTTPRequest, HTTPResponse
 from ..headers import CommaHeader
-from ..errors import HTTPError, HTTPReportedViolationError
+from ..errors import HTTPError
 from ..finalizer import finalize_response
 from ..helpers.compression import compress, decompress
-from .connection import HTTPConnection, HTTPState
+from .common import HTTPState
+from .base import HTTPConnection, HTTPProtocol
+
+REASONS = {
+    100: "Continue", 101: "Switching Protocols",
+    200: "OK", 201: "Created", 202: "Accepted", 204: "No Content", 206: "Partial Content",
+    301: "Moved Permanently", 302: "Found", 303: "See Other", 304: "Not Modified", 307: "Temporary Redirect", 308: "Permanent Redirect",
+    400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 408: "Request Timeout", 411: "Length Required", 413: "Content Too Large", 414: "URI Too Long", 426: "Upgrade Required", 431: "Request Header Fields Too Large",
+    500: "Internal Server Error", 501: "Not Implemented", 502: "Bad Gateway", 503: "Service Unavailable", 505: "HTTP Version Not Supported"
+}
+
+CLOSED = (TCPClosedError, TCPLostError, TCPTimeoutError, UDSClosedError, UDSLostError, UDSTimeoutError)
+
+PRELUDE = 8
 
 class H1Connection(HTTPConnection):
-    REASONS = {
-        100: "Continue", 101: "Switching Protocols",
-        200: "OK", 201: "Created", 202: "Accepted", 204: "No Content", 206: "Partial Content",
-        301: "Moved Permanently", 302: "Found", 303: "See Other", 304: "Not Modified", 307: "Temporary Redirect", 308: "Permanent Redirect",
-        400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 408: "Request Timeout", 411: "Length Required", 413: "Content Too Large", 414: "URI Too Long", 426: "Upgrade Required", 431: "Request Header Fields Too Large",
-        500: "Internal Server Error", 501: "Not Implemented", 502: "Bad Gateway", 503: "Service Unavailable", 505: "HTTP Version Not Supported"
-    }
-
-    CLOSED = (TCPClosedError, TCPLostError, TCPTimeoutError, UDSClosedError, UDSLostError, UDSTimeoutError)
-
-    PRELUDE = 8
-
     def __init__(self, src, dst, *, transport, role: HTTPBroadRole = HTTPBroadRole.SERVER, version="HTTP/1.1", limits=None, observer=None):
         super().__init__(src, dst, transport=transport, version=version, limits=limits, observer=observer)
 
@@ -66,14 +67,14 @@ class H1Connection(HTTPConnection):
         return True
 
     async def startline(self) -> Optional[bytes]:
-        for _ in range(H1Connection.PRELUDE + 1):
+        for _ in range(PRELUDE + 1):
             try:
                 line = await self.transport.receive_until(b"\r\n", limit=self.limits.max_startline_size)
 
             except (TCPLimitError, UDSLimitError):
                 raise HTTPError(414, "URI Too Long")
 
-            except H1Connection.CLOSED:
+            except CLOSED:
                 return None
 
             if line != b"\r\n":
@@ -212,7 +213,7 @@ class H1Connection(HTTPConnection):
         try:
             return await self.transport.receive_exactly(length)
 
-        except H1Connection.CLOSED as e:
+        except CLOSED as e:
             raise HTTPError(400, f"The body ended early: {e}")
 
     async def gather(self) -> bytes:
@@ -257,7 +258,7 @@ class H1Connection(HTTPConnection):
                 chunk = await self.transport.receive_exactly(size)
                 crlf = await self.transport.receive_exactly(2)
 
-            except H1Connection.CLOSED as e:
+            except CLOSED as e:
                 raise HTTPError(400, f"A chunk ended early: {e}")
 
             if crlf != b"\r\n":
@@ -368,7 +369,7 @@ class H1Connection(HTTPConnection):
         if response.compression and self.request is not None and not bodiless:
             compress(response, self.request.headers.get("Accept-Encoding", ""), limits=self.limits)
 
-        reason = H1Connection.REASONS.get(response.status_code, "")
+        reason = REASONS.get(response.status_code, "")
         head = f"HTTP/1.1 {response.status_code} {reason}\r\n"
 
         headers = response.headers
@@ -479,3 +480,73 @@ class H1Connection(HTTPConnection):
 
         except (TCPError, UDSError, TLSError):
             pass
+
+class H1Protocol(HTTPProtocol):
+    def __init__(self, transport, *, src, dst, role: HTTPBroadRole = HTTPBroadRole.SERVER, version="HTTP/1.1", limits=None, observer=None):
+        self.transport = transport
+        self.src = src
+        self.dst = dst
+        self.role = role
+        self.version = version
+        self.limits = limits
+        self.observer = observer
+
+    async def run(self, handler, server):
+        connection = H1Connection(self.src, self.dst, transport=self.transport, role=self.role, version=self.version, limits=self.limits, observer=self.observer)
+
+        try:
+            while True:
+                try:
+                    if not await connection.begin():
+                        break
+
+                except HTTPError as e:
+                    await server.error(connection, e)
+                    break
+
+                if connection.request.is_websocket_upgrade:
+                    await server.upgrade(connection, self.transport)
+                    break
+
+                try:
+                    result = handler.on_connection(connection)
+
+                    if inspect.isawaitable(result):
+                        await result
+
+                except HTTPError as e:
+                    if not connection.replied:
+                        await server.error(connection, e)
+
+                    break
+
+                except (TCPError, UDSError, TLSError):
+                    break
+
+                if not connection.replied:
+                    await server.error(connection, HTTPError(500, "Internal Server Error"))
+                    break
+
+                try:
+                    await connection.drain()
+
+                except (TCPError, UDSError, TLSError):
+                    break
+
+                if not connection.reusable:
+                    break
+
+        except (TCPError, UDSError, TLSError):
+            pass
+
+        finally:
+            await connection.close()
+
+    async def request(self, message: HTTPRequest) -> H1Connection:
+        connection = H1Connection(self.src, self.dst, transport=self.transport, role=self.role, version=self.version, limits=self.limits, observer=self.observer)
+        await connection.send(message)
+
+        return connection
+
+    async def shutdown(self):
+        await self.transport.close()

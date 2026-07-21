@@ -8,7 +8,7 @@ from kaede.tcp import TCPPort
 from kaede.udp import UDPPort
 from kaede.quic.tls import QTLS
 from kaede.dns import (
-    DNSPort, DNSRecordType, DNSRecords, DNSClient, DNSClientConfig,
+    DNSPort, DNSRecordType, DNSRecords, DNSClient, DNSClientConfig, DNSClientLimits,
     DNSServer, DNSServerConfig, DNSHandler
 )
 from kaede.dns.errors import DNSError, DNSConnectionError, DNSFormatError
@@ -32,16 +32,17 @@ class Running:
     def __init__(self, certificate, *, kind="tcp", on_connection=resolver):
         certfile, keyfile = certificate
 
-        config = DNSServerConfig(idle_timeout=10)
+        config = DNSServerConfig()
+        config.limits.idle_timeout = 10
         config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE)
-        config.handshake_timeout = 10
+        config.limits.handshake_timeout = 10
 
         self.kind = kind
         self.server = DNSServer(config=config)
         self.handler = DNSHandler(on_connection)
 
     async def __aenter__(self):
-        port = DNSPort("tcp", TCPPort(0), True) if self.kind == "tcp" else DNSPort("quic", UDPPort(0), True)
+        port = DNSPort("tcp", TCPPort(0)) if self.kind == "tcp" else DNSPort("quic", UDPPort(0))
 
         await self.server.listen(self.handler, [(LOCAL, port)])
         return self.server
@@ -51,7 +52,7 @@ class Running:
 
 def client(server, authority, *, hostname="localhost") -> DNSClient:
     return DNSClient(config=DNSClientConfig(
-        servers=list(server.ports), timeout=5.0, retries=0, cache=False,
+        servers=list(server.ports), limits=DNSClientLimits(timeout_query=5.0, max_retries=0), cache=False,
         tls=TLSConfig(cafile=authority.ca), hostname=hostname
     ))
 
@@ -74,7 +75,7 @@ class TestDoT:
     async def test_an_untrusted_certificate_is_rejected(self, server_certificate):
         async with Running(server_certificate) as server:
             stub = DNSClient(config=DNSClientConfig(
-                servers=list(server.ports), timeout=5.0, retries=0, cache=False,
+                servers=list(server.ports), limits=DNSClientLimits(timeout_query=5.0, max_retries=0), cache=False,
                 tls=TLSConfig(), hostname="localhost" # the system trust store lacks the test CA
             ))
 

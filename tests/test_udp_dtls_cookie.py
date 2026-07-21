@@ -7,7 +7,7 @@ from kaede.tls import TLSConfig
 from kaede.tls.openssl import TLSContext, Cookies
 from kaede.tls.errors import TLSConfigError
 from kaede.udp import UDPPort, UDPClient, UDPServer, UDPServerConfig, UDPHandler
-from kaede.udp.api.client import UDPClientConfig
+from kaede.udp.api.client import UDPClientConfig, UDPClientLimits
 
 from .conftest import Authority
 
@@ -24,10 +24,11 @@ class Running:
     def __init__(self, on_connection, certificate, *, cookies=True):
         certfile, keyfile = certificate
 
-        config = UDPServerConfig(idle_timeout=30)
+        config = UDPServerConfig()
+        config.limits.idle_timeout = 30
         config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE)
         config.cookies = cookies
-        config.handshake_timeout = 20
+        config.limits.handshake_timeout = 20
 
         self.server = UDPServer(config)
         self.handler = UDPHandler(on_connection)
@@ -147,7 +148,7 @@ class TestExchange:
                 assert await connection.receive(timeout=20) == b"HELLO"
 
     def config(self, authority):
-        config = UDPClientConfig(connect_timeout=20)
+        config = UDPClientConfig(limits=UDPClientLimits(timeout_connection=20))
         config.tls = TLSConfig(cafile=authority.ca)
         config.hostname = "localhost"
 
@@ -207,7 +208,7 @@ class TestConfiguration:
         assert UDPServerConfig().cookies is True
 
     async def test_cookies_can_be_turned_off(self, server_certificate, authority):
-        config = UDPClientConfig(connect_timeout=20)
+        config = UDPClientConfig(limits=UDPClientLimits(timeout_connection=20))
         config.tls = TLSConfig(cafile=authority.ca)
         config.hostname = "localhost"
 

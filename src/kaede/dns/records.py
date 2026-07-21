@@ -6,7 +6,7 @@ from typing import Optional, Union, List, Dict, Tuple
 from dataclasses import dataclass
 
 from .errors import DNSFormatError
-from .models import DNSName, DNSRecordType, DNSRecordData
+from .models import DNSRecordName, DNSRecordType, DNSRecordData
 
 @dataclass(frozen=True)
 class RawRecordData(DNSRecordData):
@@ -83,11 +83,11 @@ class NameRecordData(DNSRecordData):
     target: str
 
     def pack(self) -> bytes:
-        return DNSName.wire(self.target)
+        return DNSRecordName.wire(self.target)
 
     @classmethod
     def unpack(cls, raw, message, offset):
-        name, _ = DNSName.within(message, offset, offset + len(raw))
+        name, _ = DNSRecordName.within(message, offset, offset + len(raw))
         return cls(target=name)
 
     @classmethod
@@ -121,8 +121,8 @@ class SOARecordData(DNSRecordData):
     minimum: int
 
     def pack(self) -> bytes:
-        wire = bytearray(DNSName.wire(self.mname))
-        wire += DNSName.wire(self.rname)
+        wire = bytearray(DNSRecordName.wire(self.mname))
+        wire += DNSRecordName.wire(self.rname)
 
         for value in (self.serial, self.refresh, self.retry, self.expire, self.minimum):
             wire += value.to_bytes(4, "big")
@@ -133,8 +133,8 @@ class SOARecordData(DNSRecordData):
     def unpack(cls, raw, message, offset):
         end = offset + len(raw)
 
-        mname, offset = DNSName.within(message, offset, end)
-        rname, offset = DNSName.within(message, offset, end)
+        mname, offset = DNSRecordName.within(message, offset, end)
+        rname, offset = DNSRecordName.within(message, offset, end)
 
         if offset + 20 > end:
             raise DNSFormatError("The SOA record ends in the middle of its counters.")
@@ -157,14 +157,14 @@ class MXRecordData(DNSRecordData):
     exchange: str
 
     def pack(self) -> bytes:
-        return self.preference.to_bytes(2, "big") + DNSName.wire(self.exchange)
+        return self.preference.to_bytes(2, "big") + DNSRecordName.wire(self.exchange)
 
     @classmethod
     def unpack(cls, raw, message, offset):
         if len(raw) < 3:
             raise DNSFormatError(f"The MX record data is {len(raw)} bytes, which cannot carry a preference and a name.")
 
-        name, _ = DNSName.within(message, offset + 2, offset + len(raw))
+        name, _ = DNSRecordName.within(message, offset + 2, offset + len(raw))
 
         return cls(preference=int.from_bytes(raw[0:2], "big"), exchange=name)
 
@@ -224,14 +224,14 @@ class SRVRecordData(DNSRecordData):
     target: str
 
     def pack(self) -> bytes:
-        return self.priority.to_bytes(2, "big") + self.weight.to_bytes(2, "big") + self.port.to_bytes(2, "big") + DNSName.wire(self.target)
+        return self.priority.to_bytes(2, "big") + self.weight.to_bytes(2, "big") + self.port.to_bytes(2, "big") + DNSRecordName.wire(self.target)
 
     @classmethod
     def unpack(cls, raw, message, offset):
         if len(raw) < 7:
             raise DNSFormatError(f"The SRV record data is {len(raw)} bytes, which cannot carry its fields.")
 
-        name, _ = DNSName.within(message, offset + 6, offset + len(raw))
+        name, _ = DNSRecordName.within(message, offset + 6, offset + len(raw))
 
         return cls(
             priority=int.from_bytes(raw[0:2], "big"),
@@ -358,7 +358,7 @@ class RRSIGRecordData(DNSRecordData):
         wire += self.expiration.to_bytes(4, "big")
         wire += self.inception.to_bytes(4, "big")
         wire += self.key_tag.to_bytes(2, "big")
-        wire += DNSName.wire(self.signer)
+        wire += DNSRecordName.wire(self.signer)
         wire += self.signature
 
         return bytes(wire)
@@ -368,7 +368,7 @@ class RRSIGRecordData(DNSRecordData):
         if len(raw) < 19:
             raise DNSFormatError(f"The RRSIG record data is {len(raw)} bytes, which cannot carry its fields.")
 
-        signer, following = DNSName.within(message, offset + 18, offset + len(raw))
+        signer, following = DNSRecordName.within(message, offset + 18, offset + len(raw))
 
         return cls(
             type_covered=DNSRecordType.of(int.from_bytes(raw[0:2], "big")),
@@ -464,11 +464,11 @@ class NSECRecordData(DNSRecordData):
     types: Tuple[Union[DNSRecordType, int], ...] = ()
 
     def pack(self) -> bytes:
-        return DNSName.wire(self.next_domain) + Bitmap.pack(self.types)
+        return DNSRecordName.wire(self.next_domain) + Bitmap.pack(self.types)
 
     @classmethod
     def unpack(cls, raw, message, offset):
-        name, following = DNSName.within(message, offset, offset + len(raw))
+        name, following = DNSRecordName.within(message, offset, offset + len(raw))
 
         return cls(next_domain=name, types=Bitmap.unpack(message[following:offset + len(raw)]))
 
@@ -683,7 +683,7 @@ class SVCBRecordData(DNSRecordData):
 
     def pack(self) -> bytes:
         wire = bytearray(self.priority.to_bytes(2, "big"))
-        wire += DNSName.wire(self.target)
+        wire += DNSRecordName.wire(self.target)
 
         for code, raw in sorted(self.params):
             wire += code.to_bytes(2, "big")
@@ -697,7 +697,7 @@ class SVCBRecordData(DNSRecordData):
         if len(raw) < 3:
             raise DNSFormatError(f"The SVCB record data is {len(raw)} bytes, which cannot carry its fields.")
 
-        target, following = DNSName.within(message, offset + 2, offset + len(raw))
+        target, following = DNSRecordName.within(message, offset + 2, offset + len(raw))
         params: List[Tuple[int, bytes]] = []
         at = following - offset
 

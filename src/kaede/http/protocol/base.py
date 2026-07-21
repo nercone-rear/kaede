@@ -1,26 +1,14 @@
-from enum import Enum
-from typing import Optional, Union, Callable, Tuple
+from typing import Optional, Union, Callable, Tuple, TYPE_CHECKING
 
 from ...tcp import TCPConnection
 from ...udp import UDPConnection
 from ...quic import QUICConnection
-from ..models import HTTPVersion, HTTPPort, HTTPLimits, HTTPMessage
+from ..models import HTTPVersion, HTTPPort, HTTPMessage
+from ..api.common import HTTPLimits
+from .common import HTTPState
 
-class HTTPState(Enum):
-    CONNECTION_STARTED = "Connection Started"
-    CONNECTION_ENDED   = "Connection Ended"
-
-    SENT           = "Sent"
-    SENT_STARTLINE = "Sent Start line"
-    SENT_HEADERS   = "Sent Headers"
-    SENT_BODY      = "Sent Body"
-    SENT_TRAILERS  = "Sent Trailers"
-
-    RECEIVED           = "Received"
-    RECEIVED_STARTLINE = "Received Start line"
-    RECEIVED_HEADERS   = "Received Headers"
-    RECEIVED_BODY      = "Received Body"
-    RECEIVED_TRAILERS  = "Received Trailers"
+if TYPE_CHECKING:
+    from ..api.server import HTTPHandler, HTTPServer
 
 class HTTPConnection:
     def __init__(self, src: Tuple[str, HTTPPort], dst: Tuple[str, HTTPPort], *, transport: Union[TCPConnection, UDPConnection, QUICConnection], state: Optional[HTTPState] = None, version: Optional[HTTPVersion] = None, limits: Optional[HTTPLimits] = None, observer: Optional[Callable[[HTTPMessage], None]] = None):
@@ -75,4 +63,17 @@ class HTTPConnection:
         raise NotImplementedError()
 
     async def wait(self, value: HTTPState):
+        raise NotImplementedError()
+
+class HTTPProtocol:
+    async def start(self):
+        return
+
+    async def run(self, handler: "HTTPHandler", server: "HTTPServer"):
+        raise NotImplementedError()
+
+    async def request(self, message: HTTPMessage) -> HTTPConnection:
+        raise NotImplementedError()
+
+    async def shutdown(self):
         raise NotImplementedError()

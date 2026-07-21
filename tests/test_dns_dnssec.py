@@ -205,9 +205,9 @@ class TestDelegations:
         # computed SHA-1 digest must not prove the delegation, so the zone falls
         # back to insecure rather than secure.
         import hashlib
-        from kaede.dns import DNSName
+        from kaede.dns import DNSRecordName
 
-        digest = hashlib.sha1(DNSName.wire("example.net") + P256_KEY.data.pack()).digest()
+        digest = hashlib.sha1(DNSRecordName.wire("example.net") + P256_KEY.data.pack()).digest()
         sha1_ds = DNSRecord("example.net", DNSRecordType.DS, DSRecordData(55648, 13, 1, digest))
 
         assert not validator.verify_ds(P256_KEY, sha1_ds)

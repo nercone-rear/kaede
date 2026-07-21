@@ -1,44 +1,43 @@
 import asyncio
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TYPE_CHECKING
 
 from ...tls import TLSConfig
 from ...tls.errors import TLSError
 from ...udp import UDPPort
 from ...udp.errors import UDPError
-from ...quic import QUICClient, QUICClientConfig, QUICConnection, QUICStream
+from ...quic import QUICClient, QUICClientConfig, QUICClientLimits, QUICConnection, QUICStream
 from ...quic.errors import QUICError, QUICTimeoutError
 from ..models import DNSMessage
 from ..errors import DNSError, DNSFormatError, DNSConnectionError, DNSTimeoutError
-from .handler import DNSTransport
+from .base import DNSConnection, DNSProtocol
 
-class DNSStream:
-    def __init__(self, connection: QUICConnection, stream: QUICStream):
+if TYPE_CHECKING:
+    from ..api.client import DNSClientLimits
+
+class DNSQUICConnection(DNSConnection):
+    def __init__(self, connection: QUICConnection, stream: QUICStream, *, server: bool = False):
+        super().__init__(stream, stream=True, server=server)
         self.connection = connection
-        self.stream = stream
 
     @property
-    def dst(self) -> Tuple[str, UDPPort]:
-        return self.connection.dst
+    def client(self) -> Tuple[str, int]:
+        return (self.connection.dst[0], int(self.connection.dst[1]))
 
     @property
     def closed(self) -> bool:
-        return self.stream.pointer is None or self.stream.finished
+        return self.transport.pointer is None or self.transport.finished
 
-    async def send(self, data: bytes):
-        await self.stream.send(data)
+    def conclude(self):
+        self.transport.conclude()
 
-    async def receive_exactly(self, n: int) -> bytes:
-        return await self.stream.receive_exactly(n)
+class DNSQUICProtocol(DNSProtocol):
+    def __init__(self, dst: Tuple[str, int], *, tls: Optional[TLSConfig] = None, hostname: Optional[str] = None, limits: Optional["DNSClientLimits"] = None):
+        from ..api.client import DNSClientLimits
 
-    async def close(self):
-        await self.stream.close()
-
-class DNSQUICTransport(DNSTransport):
-    def __init__(self, dst: Tuple[str, int], *, tls: Optional[TLSConfig] = None, hostname: Optional[str] = None, connect_timeout: float = 5.0):
         self.dst = dst
-        self.connect_timeout = connect_timeout
+        self.limits = limits or DNSClientLimits()
 
-        self.client = QUICClient((dst[0], UDPPort(dst[1])), config=QUICClientConfig(connect_timeout=connect_timeout, tls=tls or TLSConfig(), alpn=["doq"], hostname=hostname))
+        self.client = QUICClient((dst[0], UDPPort(dst[1])), config=QUICClientConfig(limits=QUICClientLimits(timeout_connection=self.limits.timeout_connection), tls=tls or TLSConfig(), alpn=["doq"], hostname=hostname))
 
         self.connection: Optional[QUICConnection] = None
         self.lock = asyncio.Lock()
@@ -50,7 +49,8 @@ class DNSQUICTransport(DNSTransport):
         except (QUICError, TLSError, UDPError) as e:
             raise DNSConnectionError(f"Could not reach {self.dst[0]}:{self.dst[1]} over QUIC: {e}") from e
 
-    async def query(self, message: DNSMessage, *, timeout: float = 3.0) -> DNSMessage:
+    async def query(self, message: DNSMessage, *, timeout: Optional[float] = None) -> DNSMessage:
+        timeout = self.limits.timeout_query if timeout is None else timeout
         message.id = 0
 
         async with self.lock:
@@ -81,14 +81,16 @@ class DNSQUICTransport(DNSTransport):
         except QUICError as e:
             raise DNSConnectionError(f"Could not open a DoQ stream to {self.dst[0]}: {e}") from e
 
+        carried = DNSQUICConnection(self.connection, stream)
+
         try:
-            wire = message.pack()
+            await carried.send(message)
+            carried.conclude()
 
-            await stream.send(len(wire).to_bytes(2, "big") + wire)
-            stream.conclude()
+            response = await carried.receive(timeout=timeout)
 
-            header = await stream.receive_exactly(2, timeout=timeout)
-            raw = await stream.receive_exactly(int.from_bytes(header, "big"), timeout=timeout)
+        except DNSTimeoutError:
+            raise DNSTimeoutError(f"{self.dst[0]} did not answer over QUIC within {timeout} seconds.")
 
         except QUICTimeoutError:
             raise DNSTimeoutError(f"{self.dst[0]} did not answer over QUIC within {timeout} seconds.")
@@ -97,9 +99,7 @@ class DNSQUICTransport(DNSTransport):
             raise DNSConnectionError(f"The DoQ exchange with {self.dst[0]} failed: {e}") from e
 
         finally:
-            await stream.close()
-
-        response = DNSMessage.unpack(raw)
+            await carried.close()
 
         if response.id != 0:
             raise DNSFormatError(f"{self.dst[0]} answered over DoQ with the message ID {response.id} rather than 0.")

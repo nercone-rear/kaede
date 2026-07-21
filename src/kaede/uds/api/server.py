@@ -8,22 +8,21 @@ from typing import Optional, List, Deque, Callable
 from collections import deque
 from dataclasses import dataclass, field
 
-from ...protocol import ServerLimits
-from ..models import UDSAddress
+from ...models import ServerLimits
+from ..models import UDSPort
 from ..errors import UDSError
 from ..protocol import UDSConnection, UDSProtocol
+from .common import UDSLimits, UDSConfig
 
 @dataclass
-class UDSServerLimits(ServerLimits):
-    pass
+class UDSServerLimits(UDSLimits, ServerLimits):
+    idle_timeout: Optional[float] = None
 
 @dataclass
-class UDSServerConfig:
+class UDSServerConfig(UDSConfig):
     limits: UDSServerLimits = field(default_factory=lambda: UDSServerLimits())
 
     mode: Optional[int] = None # permission bits applied to each bound socket file, e.g. 0o600.
-
-    idle_timeout: Optional[float] = None
 
 class UDSHandler:
     def __init__(self, on_connection: Optional[Callable] = None):
@@ -67,7 +66,7 @@ class UDSGate:
 
 class UDSServerProtocol(UDSProtocol):
     def __init__(self, server: "UDSServer", handler: UDSHandler):
-        super().__init__(handler=handler)
+        super().__init__(handler=handler, limits=server.config.limits)
         self.server = server
 
     def connection_made(self, transport: asyncio.Transport):
@@ -93,14 +92,14 @@ class UDSServer:
         self.stopped: Optional[asyncio.Event] = None
 
     @property
-    def paths(self) -> List[UDSAddress]:
+    def paths(self) -> List[UDSPort]:
         return [UDSProtocol.address(sock.getsockname()) for server in self.servers for sock in (server.sockets or ())]
 
     @property
     def interval(self) -> float:
-        return max(1.0, self.config.idle_timeout / 4) if self.config.idle_timeout else max(1.0, self.gate.window)
+        return max(1.0, self.config.limits.idle_timeout / 4) if self.config.limits.idle_timeout else max(1.0, self.gate.window)
 
-    async def listen(self, handler: UDSHandler, paths: Optional[List[UDSAddress]] = None, *, sockets: Optional[List[socket.socket]] = None):
+    async def listen(self, handler: UDSHandler, paths: Optional[List[UDSPort]] = None, *, sockets: Optional[List[socket.socket]] = None):
         if not paths and not sockets:
             raise ValueError("At least one UDS path must be provided.")
 
@@ -134,11 +133,11 @@ class UDSServer:
 
         self.sweeper = asyncio.ensure_future(self.watch())
 
-    async def serve(self, handler: UDSHandler, paths: Optional[List[UDSAddress]] = None, *, sockets: Optional[List[socket.socket]] = None):
+    async def serve(self, handler: UDSHandler, paths: Optional[List[UDSPort]] = None, *, sockets: Optional[List[socket.socket]] = None):
         await self.listen(handler, paths, sockets=sockets)
         await self.stopped.wait()
 
-    def bind(self, path: UDSAddress) -> socket.socket:
+    def bind(self, path: UDSPort) -> socket.socket:
         self.unlink(path)
 
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -160,7 +159,7 @@ class UDSServer:
 
         return sock
 
-    def unlink(self, path: UDSAddress):
+    def unlink(self, path: UDSPort):
         if not path or path.abstract:
             return
 
@@ -211,12 +210,12 @@ class UDSServer:
             self.expire()
 
     def expire(self, now: Optional[float] = None):
-        if self.config.idle_timeout is None:
+        if self.config.limits.idle_timeout is None:
             return
 
         now = time.monotonic() if now is None else now
 
-        for connection in [c for c in self.connections if now - c.active > self.config.idle_timeout]:
+        for connection in [c for c in self.connections if now - c.active > self.config.limits.idle_timeout]:
             connection.drop()
 
     async def close(self, timeout: Optional[float] = None):
@@ -255,7 +254,7 @@ class UDSServer:
         if self.stopped is not None:
             self.stopped.set()
 
-    def run(self, handler: UDSHandler, workers: int = 4, paths: Optional[List[UDSAddress]] = None):
+    def run(self, handler: UDSHandler, workers: int = 4, paths: Optional[List[UDSPort]] = None):
         if not paths:
             raise ValueError("At least one UDS path must be provided.")
 
@@ -300,7 +299,7 @@ class UDSServer:
             for path in paths:
                 self.unlink(path)
 
-    def start(self, handler: UDSHandler, paths: List[UDSAddress], *, sockets: Optional[List[socket.socket]] = None):
+    def start(self, handler: UDSHandler, paths: List[UDSPort], *, sockets: Optional[List[socket.socket]] = None):
         try:
             import uvloop
             run = uvloop.run

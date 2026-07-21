@@ -3,8 +3,8 @@ import ipaddress
 import pytest
 
 from kaede.dns import (
-    DNSOpcode, DNSResponseCode, DNSRecordType, DNSRecordClass, DNSName,
-    DNSQuestion, DNSRecord, DNSRecords, EDNS, DNSMessage
+    DNSOpCode, DNSResponseCode, DNSRecordType, DNSRecordClass, DNSRecordName,
+    DNSQuestion, DNSRecord, DNSRecords, DNSExtension, DNSMessage
 )
 from kaede.dns.errors import DNSError, DNSFormatError, DNSNameError
 from kaede.dns.records import (
@@ -31,7 +31,7 @@ class TestHeader:
 
         assert message.id == 0x1234
         assert message.response
-        assert message.opcode == DNSOpcode.STATUS
+        assert message.opcode == DNSOpCode.STATUS
         assert message.authoritative
         assert message.truncated
         assert message.recursion_desired
@@ -41,7 +41,7 @@ class TestHeader:
         assert message.rcode == DNSResponseCode.NXDOMAIN
 
     def test_packing_reverses_the_bits(self):
-        message = DNSMessage(id=0x1234, response=True, opcode=DNSOpcode.STATUS, authoritative=True, truncated=True,
+        message = DNSMessage(id=0x1234, response=True, opcode=DNSOpCode.STATUS, authoritative=True, truncated=True,
                              recursion_desired=True, recursion_available=True, authentic=True, check_disabled=True,
                              rcode=DNSResponseCode.NXDOMAIN)
 
@@ -59,38 +59,38 @@ class TestHeader:
 class TestNames:
     def test_round_trips(self):
         message = bytearray()
-        DNSName.pack("www.Example.COM", message, None)
+        DNSRecordName.pack("www.Example.COM", message, None)
 
         assert bytes(message) == b"\x03www\x07Example\x03COM\x00"
-        assert DNSName.unpack(bytes(message), 0) == ("www.Example.COM", len(message))
+        assert DNSRecordName.unpack(bytes(message), 0) == ("www.Example.COM", len(message))
 
     def test_the_root_is_a_single_zero(self):
-        assert DNSName.wire("") == b"\x00"
-        assert DNSName.wire(".") == b"\x00"
-        assert DNSName.unpack(b"\x00", 0) == ("", 1)
+        assert DNSRecordName.wire("") == b"\x00"
+        assert DNSRecordName.wire(".") == b"\x00"
+        assert DNSRecordName.unpack(b"\x00", 0) == ("", 1)
 
     def test_compression_pointers_resolve(self):
         # RFC 1035 section 4.1.4: a pointer replaces an entire suffix.
         raw = b"\x07example\x03com\x00" + b"\x03www\xc0\x00"
 
-        assert DNSName.unpack(raw, 13) == ("www.example.com", len(raw))
+        assert DNSRecordName.unpack(raw, 13) == ("www.example.com", len(raw))
 
     def test_a_pointer_must_point_backward(self):
         with pytest.raises(DNSFormatError):
-            DNSName.unpack(b"\xc0\x00", 0) # points at itself
+            DNSRecordName.unpack(b"\xc0\x00", 0) # points at itself
 
         with pytest.raises(DNSFormatError):
-            DNSName.unpack(b"\xc0\x04\x00\x00\x03www\x00", 0) # points forward
+            DNSRecordName.unpack(b"\xc0\x04\x00\x00\x03www\x00", 0) # points forward
 
     def test_a_name_may_not_run_past_its_record_data(self):
         # The label "www" needs a terminating \x00, but with end=4 that zero at
         # offset 4 lies outside the record's RDLENGTH, so the name would be read
         # from the following record's bytes. It must be rejected instead.
         with pytest.raises(DNSFormatError):
-            DNSName.within(b"\x03www\x00", 0, 4)
+            DNSRecordName.within(b"\x03www\x00", 0, 4)
 
     def test_a_name_ending_within_its_record_data_is_accepted(self):
-        name, following = DNSName.within(b"\x03www\x00", 0, 5)
+        name, following = DNSRecordName.within(b"\x03www\x00", 0, 5)
 
         assert name == "www"
         assert following == 5
@@ -100,35 +100,35 @@ class TestNames:
         raw = b"\x01a\xc0\x04\x01b\xc0\x00"
 
         with pytest.raises(DNSError):
-            DNSName.unpack(raw, 4)
+            DNSRecordName.unpack(raw, 4)
 
     def test_the_reserved_length_bits_are_rejected(self):
         # RFC 1035 section 4.1.4: 0x40 and 0x80 are reserved.
         with pytest.raises(DNSFormatError):
-            DNSName.unpack(b"\x41a\x00", 0)
+            DNSRecordName.unpack(b"\x41a\x00", 0)
 
     def test_a_label_longer_than_63_bytes_is_rejected(self):
         with pytest.raises(DNSNameError):
-            DNSName.wire("a" * 64 + ".example")
+            DNSRecordName.wire("a" * 64 + ".example")
 
     def test_a_name_longer_than_255_bytes_is_rejected(self):
         with pytest.raises(DNSNameError):
-            DNSName.wire(".".join(["a" * 63] * 4) + ".example")
+            DNSRecordName.wire(".".join(["a" * 63] * 4) + ".example")
 
     def test_an_empty_label_is_rejected(self):
         with pytest.raises(DNSNameError):
-            DNSName.wire("a..b")
+            DNSRecordName.wire("a..b")
 
     def test_escapes_round_trip(self):
         # RFC 1035 section 5.1: \. keeps a dot inside a label, \DDD is a raw byte.
         message = bytearray()
-        DNSName.pack(r"a\.b.\032c", message, None)
+        DNSRecordName.pack(r"a\.b.\032c", message, None)
 
         assert bytes(message) == b"\x03a.b\x02 c\x00"
-        assert DNSName.unpack(bytes(message), 0) == (r"a\.b.\032c", len(message))
+        assert DNSRecordName.unpack(bytes(message), 0) == (r"a\.b.\032c", len(message))
 
     def test_non_ascii_names_travel_as_idna(self):
-        wire = DNSName.wire("日本語.jp")
+        wire = DNSRecordName.wire("日本語.jp")
 
         assert wire == b"\x0exn--wgv71a119e\x02jp\x00"
 
@@ -136,12 +136,12 @@ class TestNames:
         message = bytearray()
         pointers = {}
 
-        DNSName.pack("example.com", message, pointers)
+        DNSRecordName.pack("example.com", message, pointers)
         before = len(message)
-        DNSName.pack("www.example.com", message, pointers)
+        DNSRecordName.pack("www.example.com", message, pointers)
 
         assert len(message) - before == 4 + 2 # "www" plus one pointer
-        assert DNSName.unpack(bytes(message), before) == ("www.example.com", len(message))
+        assert DNSRecordName.unpack(bytes(message), before) == ("www.example.com", len(message))
 
 class TestMessages:
     def test_a_query_round_trips(self):
@@ -181,7 +181,7 @@ class TestMessages:
             DNSMessage.unpack(header() + b"\x00")
 
     def test_every_truncation_is_rejected(self):
-        message = DNSMessage(id=1, response=True, questions=[DNSQuestion("example.com", DNSRecordType.A)], edns=EDNS())
+        message = DNSMessage(id=1, response=True, questions=[DNSQuestion("example.com", DNSRecordType.A)], edns=DNSExtension())
         message.answers.append(DNSRecord("example.com", DNSRecordType.MX, MXRecordData(10, "mail.example.com"), ttl=300))
         wire = message.pack()
 
@@ -215,7 +215,7 @@ class TestMessages:
         assert DNSMessage.unpack(message.pack()).answers[0].data.raw == b"abc"
 
     def test_reply_echoes_the_question(self):
-        query = DNSMessage(id=7, questions=[DNSQuestion("example.com", DNSRecordType.A)], edns=EDNS())
+        query = DNSMessage(id=7, questions=[DNSQuestion("example.com", DNSRecordType.A)], edns=DNSExtension())
         reply = query.reply(rcode=DNSResponseCode.NXDOMAIN)
 
         assert reply.id == 7
@@ -226,7 +226,7 @@ class TestMessages:
 
 class TestEDNS:
     def test_the_opt_record_is_synthesized_and_extracted(self):
-        message = DNSMessage(id=1, questions=[DNSQuestion("example.com", DNSRecordType.A)], edns=EDNS(payload_size=4096, do=True, options=[(10, b"\x01\x02")]))
+        message = DNSMessage(id=1, questions=[DNSQuestion("example.com", DNSRecordType.A)], edns=DNSExtension(payload_size=4096, do=True, options=[(10, b"\x01\x02")]))
         wire = message.pack()
         back = DNSMessage.unpack(wire)
 
@@ -239,7 +239,7 @@ class TestEDNS:
 
     def test_the_extended_rcode_is_split_across_opt_and_header(self):
         # RFC 6891 section 6.1.3: the upper 8 bits live in the OPT TTL.
-        message = DNSMessage(id=1, response=True, rcode=DNSResponseCode.BADVERS, edns=EDNS())
+        message = DNSMessage(id=1, response=True, rcode=DNSResponseCode.BADVERS, edns=DNSExtension())
         wire = message.pack()
         back = DNSMessage.unpack(wire)
 

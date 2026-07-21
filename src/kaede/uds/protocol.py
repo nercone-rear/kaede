@@ -2,20 +2,22 @@ import time
 import asyncio
 from typing import Optional, TYPE_CHECKING
 
-from .models import UDSAddress
+from .models import UDSPort
 from .errors import UDSConnectionError, UDSClosedError, UDSLostError, UDSTimeoutError, UDSBusyError, UDSLimitError
 
 if TYPE_CHECKING:
     from .api.server import UDSHandler
+    from .api.common import UDSLimits
 
 class UDSConnection:
-    buffer_limit = 65536
+    def __init__(self, src: UDSPort, dst: UDSPort, *, handler: Optional["UDSHandler"] = None, protocol: Optional["UDSProtocol"] = None, limits: Optional["UDSLimits"] = None):
+        from .api.common import UDSLimits
 
-    def __init__(self, src: UDSAddress, dst: UDSAddress, *, handler: Optional["UDSHandler"] = None, protocol: Optional["UDSProtocol"] = None):
         self.src = src
         self.dst = dst
         self.handler = handler
         self.protocol = protocol
+        self.limits = limits or UDSLimits()
 
         self.transport: Optional[asyncio.Transport] = None
 
@@ -119,7 +121,7 @@ class UDSConnection:
         if not separator:
             raise ValueError("The separator must not be empty.")
 
-        limit = self.buffer_limit if limit is None else limit
+        limit = self.limits.max_buffer_size if limit is None else limit
         start = 0
 
         while True:
@@ -203,7 +205,7 @@ class UDSConnection:
         return data
 
     def full(self) -> bool:
-        return len(self.buffer) >= max(self.buffer_limit, self.need)
+        return len(self.buffer) >= max(self.limits.max_buffer_size, self.need)
 
     def attach(self, transport: asyncio.Transport):
         self.transport = transport
@@ -272,18 +274,19 @@ class UDSConnection:
             self.reader.set_result(None)
 
 class UDSProtocol(asyncio.Protocol):
-    def __init__(self, src: Optional[UDSAddress] = None, handler: Optional["UDSHandler"] = None, connection: Optional[UDSConnection] = None):
+    def __init__(self, src: Optional[UDSPort] = None, handler: Optional["UDSHandler"] = None, connection: Optional[UDSConnection] = None, limits: Optional["UDSLimits"] = None):
         self.src = src
         self.handler = handler
         self.connection = connection
+        self.limits = limits
         self.transport: Optional[asyncio.Transport] = None
 
     @staticmethod
-    def address(value) -> UDSAddress:
+    def address(value) -> UDSPort:
         if not value:
-            return UDSAddress("")
+            return UDSPort("")
 
-        return UDSAddress(value.decode(errors="replace") if isinstance(value, bytes) else str(value))
+        return UDSPort(value.decode(errors="replace") if isinstance(value, bytes) else str(value))
 
     def connection_made(self, transport: asyncio.Transport):
         self.transport = transport
@@ -292,7 +295,7 @@ class UDSProtocol(asyncio.Protocol):
         dst = UDSProtocol.address(transport.get_extra_info("peername"))
 
         if self.connection is None:
-            self.connection = UDSConnection(src, dst, handler=self.handler, protocol=self)
+            self.connection = UDSConnection(src, dst, handler=self.handler, protocol=self, limits=self.limits)
         else:
             self.connection.src = src
             self.connection.dst = dst

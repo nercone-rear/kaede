@@ -8,9 +8,10 @@ difference nobody notices.
 
 import pytest
 
-from kaede.http.models import HTTPBroadRole, HTTPLimits, HTTPHeaders, HTTPResponse
-from kaede.http.protocol.h2 import H2Session, H2Connection, H2StreamError
-from kaede.http.protocol.h3 import H3Session, H3Connection, H3Error
+from kaede.http.models import HTTPBroadRole, HTTPHeaders, HTTPResponse
+from kaede.http.api.common import HTTPLimits
+from kaede.http.protocol.h2 import H2Protocol, H2Connection, H2StreamError
+from kaede.http.protocol.h3 import H3Protocol, H3Connection, H3Error
 
 REQUEST = [(":method", "GET"), (":scheme", "https"), (":path", "/"), (":authority", "a")]
 
@@ -29,14 +30,14 @@ def role(server):
     return HTTPBroadRole.SERVER if server else HTTPBroadRole.CLIENT
 
 def h2(server=True):
-    session = H2Session.__new__(H2Session)
+    session = H2Protocol.__new__(H2Protocol)
     session.transport, session.limits, session.observer = object(), HTTPLimits(), None
     session.remote = type("Remote", (), {"initial_window_size": 65535})()
 
     return H2Connection(session, 1, role=role(server))
 
 def h3(server=True):
-    session = H3Session.__new__(H3Session)
+    session = H3Protocol.__new__(H3Protocol)
     session.connection, session.limits, session.observer = object(), HTTPLimits(), None
 
     return H3Connection(session, None, role=role(server))

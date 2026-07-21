@@ -1,8 +1,12 @@
 import urllib.parse
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict
 from dataclasses import dataclass
 
+from .ip import IPVersion
 from .constants import Characters
+
+LITERAL    = frozenset("0123456789abcdefABCDEF:.")
+REGISTERED = frozenset("-._~%!$&'()*+,;=") | Characters.DIGIT | Characters.LOWER | Characters.UPPER
 
 @dataclass
 class URL:
@@ -13,23 +17,29 @@ class URL:
     query: str
     fragment: str
 
-    DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443, "dns": 53, "ftp": 21}
-
-    LITERAL    = frozenset("0123456789abcdefABCDEF:.")
-    REGISTERED = frozenset("-._~%!$&'()*+,;=") | Characters.DIGIT | Characters.LOWER | Characters.UPPER
-
     def __str__(self) -> str:
-        location = self.netloc
-        value = f"{self.scheme}://{location}" if self.scheme else location
-        value += self.path or ("/" if location else "")
+        out = self.netloc
+
+        if self.scheme:
+            out = f"{self.scheme}://" + out
+
+        if self.path:
+            out += self.path
 
         if self.query:
-            value += f"?{self.query}"
+            out += f"?{self.query}"
 
         if self.fragment:
-            value += f"#{self.fragment}"
+            out += f"#{self.fragment}"
 
-        return value
+        return out
+
+    @property
+    def netloc(self) -> str:
+        if IPVersion.from_address(self.host) == IPVersion.IPv6:
+            return f"[{self.host}]" if self.port is None else f"[{self.host}]:{self.port}"
+
+        return f"{self.host}" if self.port is None else f"{self.host}:{self.port}"
 
     @property
     def params(self) -> Dict[str, List[str]]:
@@ -39,56 +49,58 @@ class URL:
             if not part:
                 continue
 
-            name, _, value = part.partition("=")
-            found.setdefault(urllib.parse.unquote(name), []).append(urllib.parse.unquote(value))
+            key, _, value = part.partition("=")
+            found.setdefault(urllib.parse.unquote(key), []).append(urllib.parse.unquote(value))
 
         return found
-
-    @property
-    def netloc(self) -> str:
-        location = f"[{self.host}]" if ":" in self.host else self.host
-
-        if self.port is not None and URL.DEFAULT_PORTS.get(self.scheme) != self.port:
-            location += f":{self.port}"
-
-        return location
 
     @staticmethod
     def authority(value: str) -> bool:
         if value.startswith("["):
             host, bracket, rest = value[1:].partition("]")
 
-            if not bracket or not host or not URL.LITERAL.issuperset(host):
+            if not bracket or not host or not LITERAL.issuperset(host):
                 return False
 
             return not rest or (rest.startswith(":") and Characters.DIGIT.issuperset(rest[1:]))
 
         host, colon, port = value.partition(":")
 
-        if not URL.REGISTERED.issuperset(host):
+        if not REGISTERED.issuperset(host):
             return False
 
         return not colon or Characters.DIGIT.issuperset(port)
 
     @classmethod
-    def parse(cls, value: str) -> "URL":
-        parts = urllib.parse.urlsplit(value)
+    def parse(cls, *, target: str, scheme: str, authority: str) -> "URL":
+        if target.startswith("/"):
+            return URL.parse_origin(target=target, scheme=scheme, authority=authority)
 
+        if target == "*":
+            return URL.parse_asterisk(scheme=scheme, authority=authority)
+
+        if "://" in target:
+            return URL.parse_absolute(target=target)
+
+        return URL.parse_authority(target=target, scheme=scheme)
+
+    @classmethod
+    def parse_origin(cls, *, target: str, scheme: str, authority: str) -> "URL":
+        location = urllib.parse.urlsplit(f"//{authority}")
+        path, _, query = target.partition("?")
+        return cls(scheme=scheme, host=location.hostname or "", port=location.port, path=path, query=query, fragment="")
+
+    @classmethod
+    def parse_asterisk(cls, *, scheme: str, authority: str) -> "URL":
+        location = urllib.parse.urlsplit(f"//{authority}")
+        return cls(scheme=scheme, host=location.hostname or "", port=location.port, path="*", query="", fragment="")
+
+    @classmethod
+    def parse_absolute(cls, *, target: str) -> "URL":
+        parts = urllib.parse.urlsplit(target)
         return cls(scheme=parts.scheme, host=parts.hostname or "", port=parts.port, path=parts.path, query=parts.query, fragment=parts.fragment)
 
     @classmethod
-    def from_target(cls, target: str, scheme: str, authority: str) -> "URL":
-        location = urllib.parse.urlsplit(f"//{authority}")
-
-        if target.startswith("/"): # origin-form
-            path, _, query = target.partition("?")
-            return cls(scheme=scheme, host=location.hostname or "", port=location.port, path=path, query=query, fragment="")
-
-        if target == "*": # asterisk-form
-            return cls(scheme=scheme, host=location.hostname or "", port=location.port, path="*", query="", fragment="")
-
-        if "://" in target: # absolute-form
-            return cls.parse(target)
-
-        peer = urllib.parse.urlsplit(f"//{target}") # authority-form
+    def parse_authority(cls, *, target: str, scheme: str) -> "URL":
+        peer = urllib.parse.urlsplit(f"//{target}")
         return cls(scheme=scheme, host=peer.hostname or "", port=peer.port, path="", query="", fragment="")

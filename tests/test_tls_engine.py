@@ -508,7 +508,7 @@ class TestECHConfigList:
 
 class TestECH:
     def test_a_client_and_server_agree_on_the_encrypted_hello(self, library, server_certificate, authority, ech_keys):
-        server = TLSConfig(ech_pemfiles=[ech_keys.pemfile])
+        server = TLSConfig(echfile=ech_keys.pemfile)
         client, server_session, _ = pair(library, server_certificate, server=server, ca=authority.ca, ech=ech_keys.configlist)
 
         assert pump(client, server_session)
@@ -551,7 +551,7 @@ class TestECH:
         corrupted = bytearray(ech_keys.configlist)
         corrupted[20] ^= 0xff  # deep inside the HPKE public key, keeps every length field intact
 
-        server = TLSConfig(verify_mode=CERT_NONE, ech_pemfiles=[ech_keys.pemfile])
+        server = TLSConfig(verify_mode=CERT_NONE, echfile=ech_keys.pemfile)
         client = TLSConfig(verify_mode=CERT_NONE)
         client_session, server_session, _ = pair(library, server_certificate, client=client, server=server, ech=bytes(corrupted))
 
@@ -562,13 +562,13 @@ class TestECH:
         assert caught.value.retry_config  # the server hands back a usable config to retry with
         ECHConfigList.parse(caught.value.retry_config)  # and it is well formed
 
-    def test_ech_pemfiles_is_rejected_on_a_client_context(self, library):
+    def test_echfile_is_rejected_on_a_client_context(self, library):
         with pytest.raises(TLSConfigError):
-            TLSContext(TLSConfig(ech_pemfiles=["/nonexistent/ech.pem"]), server=False, library=library)
+            TLSContext(TLSConfig(echfile="/nonexistent/ech.pem"), server=False, library=library)
 
     def test_a_missing_ech_pemfile_is_rejected(self, library, server_certificate):
         certfile, keyfile = server_certificate
-        config = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, ech_pemfiles=["/nonexistent/ech.pem"])
+        config = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, echfile="/nonexistent/ech.pem")
 
         with pytest.raises(TLSConfigError):
             TLSContext(config, server=True, library=library)
@@ -588,11 +588,11 @@ class TestECH:
         with pytest.raises(TLSConfigError):
             context.session(hostname="localhost", ech=ech_keys.configlist)
 
-    def test_ech_pemfiles_requires_openssl_4_0(self, library, monkeypatch, server_certificate, ech_keys):
+    def test_echfile_requires_openssl_4_0(self, library, monkeypatch, server_certificate, ech_keys):
         monkeypatch.setattr(library, "echstore_new", None)
 
         certfile, keyfile = server_certificate
-        config = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, ech_pemfiles=[ech_keys.pemfile])
+        config = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, echfile=ech_keys.pemfile)
 
         with pytest.raises(TLSConfigError):
             TLSContext(config, server=True, library=library)

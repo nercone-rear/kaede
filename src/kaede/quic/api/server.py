@@ -12,31 +12,28 @@ from dataclasses import dataclass, field
 
 from ...tls import TLSConfig
 from ...tls.errors import TLSError
-from ...protocol import ServerLimits
+from ...models import ServerLimits, ServerConfig
 from ...udp.models import UDPPort
 from ...udp.api.server import UDPServer
 from ..errors import QUICError
 from ..models import QUICPacket
 from ..tls import QUICContext
 from ..protocol import QUICEndpoint, QUICConnection
+from .common import QUICLimits, QUICConfig
 
 @dataclass
-class QUICServerLimits(ServerLimits):
+class QUICServerLimits(QUICLimits, ServerLimits):
     max_stream_nums: int = 100 # per connection
-
-@dataclass
-class QUICServerConfig:
-    limits: QUICServerLimits = field(default_factory=lambda: QUICServerLimits())
 
     idle_timeout: float = 30.0
 
-    tls: Optional[TLSConfig] = None
+    handshake_timeout: Optional[float] = 30.0
 
-    alpn: Optional[List[str]] = None
+@dataclass
+class QUICServerConfig(QUICConfig, ServerConfig):
+    limits: QUICServerLimits = field(default_factory=lambda: QUICServerLimits())
 
     validate: bool = True
-
-    handshake_timeout: Optional[float] = 30.0
 
 class QUICHandler:
     def __init__(self, on_connection: Optional[Callable] = None):
@@ -280,7 +277,7 @@ class QUICServer:
 
     @property
     def interval(self) -> float:
-        return max(1.0, self.config.idle_timeout / 4)
+        return max(1.0, self.config.limits.idle_timeout / 4)
 
     async def listen(self, handler: QUICHandler, ports: Optional[List[Tuple[str, UDPPort]]] = None, *, reuse_port: bool = False, sockets: Optional[List[socket.socket]] = None):
         ports = [("0.0.0.0", UDPPort(0))] if ports is None else ports
@@ -334,7 +331,7 @@ class QUICServer:
         try:
             connection.max_streams = self.config.limits.max_stream_nums
 
-            await connection.handshake(self.config.handshake_timeout)
+            await connection.handshake(self.config.limits.handshake_timeout)
 
             if self.handler is not None and self.handler.on_connection is not None:
                 result = self.handler.on_connection(connection)
@@ -355,7 +352,7 @@ class QUICServer:
             endpoint = connection.endpoint
 
             try:
-                await connection.close()
+                await connection.close(timeout=self.config.limits.close_timeout)
 
             except Exception:
                 pass
@@ -376,7 +373,7 @@ class QUICServer:
     def expire(self, now: Optional[float] = None):
         now = time.monotonic() if now is None else now
 
-        for connection in [c for c in self.connections if now - c.active > self.config.idle_timeout]:
+        for connection in [c for c in self.connections if now - c.active > self.config.limits.idle_timeout]:
             asyncio.ensure_future(connection.close(timeout=1.0))
 
         self.gate.sweep(now)

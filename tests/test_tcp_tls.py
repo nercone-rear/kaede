@@ -7,7 +7,7 @@ import pytest
 from kaede.tls import TLSConfig, TLSGroup
 from kaede.tls.errors import TLSError, TLSVerificationError, TLSECHError
 from kaede.tcp import TCPPort, TCPClient, TCPServer, TCPServerConfig, TCPHandler
-from kaede.tcp.api.client import TCPClientConfig
+from kaede.tcp.api.client import TCPClientConfig, TCPClientLimits
 from kaede.tcp.errors import TCPClosedError
 
 LOCAL = "127.0.0.1"
@@ -15,11 +15,11 @@ LOCAL = "127.0.0.1"
 class Running:
     """A TLS enabled TCPServer on an ephemeral port."""
 
-    def __init__(self, on_connection, certificate, *, alpn=None, ech_pemfiles=None):
+    def __init__(self, on_connection, certificate, *, alpn=None, echfile=None):
         certfile, keyfile = certificate
 
         config = TCPServerConfig()
-        config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, ech_pemfiles=ech_pemfiles or [])
+        config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE, echfile=echfile)
         config.alpn = alpn
 
         self.server = TCPServer(config)
@@ -33,7 +33,7 @@ class Running:
         await self.server.close(timeout=2)
 
 def client(server, authority, *, alpn=None, hostname="localhost", verify=True, ech=None):
-    config = TCPClientConfig(connect_timeout=5)
+    config = TCPClientConfig(limits=TCPClientLimits(timeout_connection=5))
     config.tls = TLSConfig(cafile=authority.ca) if verify else TLSConfig(verify_mode=CERT_NONE)
     config.alpn = alpn
     config.hostname = hostname
@@ -106,7 +106,7 @@ class TestRoundTrip:
 class TestVerification:
     async def test_rejects_a_certificate_from_an_unknown_ca(self, server_certificate):
         async with Running(upper, server_certificate) as server:
-            config = TCPClientConfig(connect_timeout=5)
+            config = TCPClientConfig(limits=TCPClientLimits(timeout_connection=5))
             config.tls = TLSConfig()  # the system trust store, which lacks the test CA
 
             with pytest.raises(TLSVerificationError):
@@ -134,7 +134,7 @@ class TestVerification:
 
     async def test_a_rejected_handshake_does_not_stop_the_server(self, server_certificate, authority):
         async with Running(upper, server_certificate) as server:
-            config = TCPClientConfig(connect_timeout=5)
+            config = TCPClientConfig(limits=TCPClientLimits(timeout_connection=5))
             config.tls = TLSConfig()
 
             with pytest.raises(TLSVerificationError):
@@ -233,7 +233,7 @@ class TestInteroperability:
         port = listener.sockets[0].getsockname()[1]
 
         try:
-            config = TCPClientConfig(connect_timeout=5)
+            config = TCPClientConfig(limits=TCPClientLimits(timeout_connection=5))
             config.tls = TLSConfig(cafile=authority.ca)
 
             async with TCPClient((LOCAL, TCPPort(port)), config=config) as connection:
@@ -272,7 +272,7 @@ class TestAlerts:
         port = listener.sockets[0].getsockname()[1]
 
         try:
-            config = TCPClientConfig(connect_timeout=5)
+            config = TCPClientConfig(limits=TCPClientLimits(timeout_connection=5))
             config.tls = TLSConfig()  # the test CA is not in the system trust store
             config.hostname = "localhost"
 
@@ -306,7 +306,7 @@ class TestClosing:
 
 class TestECH:
     async def test_a_real_connection_encrypts_the_client_hello(self, server_certificate, authority, ech_keys):
-        async with Running(upper, server_certificate, ech_pemfiles=[ech_keys.pemfile]) as server:
+        async with Running(upper, server_certificate, echfile=ech_keys.pemfile) as server:
             async with client(server, authority, ech=ech_keys.configlist) as connection:
                 await connection.send(b"hello")
                 assert await connection.receive_exactly(5) == b"HELLO"
@@ -316,7 +316,7 @@ class TestECH:
                 assert connection.ech_status.outer_sni == ech_keys.public_name
 
     async def test_a_server_without_ech_configured_does_not_downgrade(self, server_certificate, authority, ech_keys):
-        # The server here never received ech_pemfiles, so it cannot decrypt the
+        # The server here never received echfile, so it cannot decrypt the
         # inner Client Hello: the client must fail rather than proceed in the clear.
         async with Running(upper, server_certificate) as server:
             with pytest.raises(TLSError):
@@ -326,8 +326,8 @@ class TestECH:
         corrupted = bytearray(ech_keys.configlist)
         corrupted[20] ^= 0xff
 
-        async with Running(upper, server_certificate, ech_pemfiles=[ech_keys.pemfile]) as server:
-            config = TCPClientConfig(connect_timeout=5)
+        async with Running(upper, server_certificate, echfile=ech_keys.pemfile) as server:
+            config = TCPClientConfig(limits=TCPClientLimits(timeout_connection=5))
             config.tls = TLSConfig(verify_mode=CERT_NONE)
             config.hostname = "localhost"
             config.ech = bytes(corrupted)

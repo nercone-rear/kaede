@@ -3,6 +3,8 @@ from enum import Enum
 from typing import Optional, Union, List
 from dataclasses import dataclass, field
 
+from ..models import Limits, Config
+
 class TLSVersion(Enum):
     TLSv1_0 = "TLSv1.0"
     TLSv1_1 = "TLSv1.1"
@@ -221,7 +223,16 @@ class TLSCipher(Enum):
         return {cipher.value.upper(): cipher for cipher in TLSCipher}[value.upper()]
 
 @dataclass
-class TLSConfig:
+class TLSLimits(Limits):
+    max_buffer_size: int = 32768 # in bytes
+    read_chunk_size: int = 16384 # in bytes, the granularity used while pulling decrypted plaintext out of the session
+
+    # Timeout
+    timeout_connection: float = 10
+    timeout_handshake:  float = 5
+
+@dataclass
+class TLSConfig(Config):
     minimum_version: TLSVersion = TLSVersion.TLSv1_2
 
     cafile: Optional[str] = None
@@ -230,11 +241,13 @@ class TLSConfig:
 
     certfile: Optional[str] = None
     keyfile:  Optional[str] = None
+    echfile:  Optional[str] = None
 
-    verify_mode:  Optional[ssl.VerifyMode] = None
-    verify_flags: ssl.VerifyFlags          = ssl.VerifyFlags.VERIFY_X509_TRUSTED_FIRST
+    outer_sni: Optional[str] = None
+    inner_sni: Optional[str] = None
 
-    ech_pemfiles: List[str] = field(default_factory=list)
+    verify_mode:  Optional[ssl.VerifyMode]  = None
+    verify_flags: Optional[ssl.VerifyFlags] = None
 
     groups: List[TLSGroup] = field(default_factory=lambda: [
         # PQC (Hybrid)
@@ -265,4 +278,7 @@ class TLSConfig:
     ])
 
     def verification(self, server: bool) -> ssl.VerifyMode:
-        return self.verify_mode or (ssl.CERT_NONE if server else ssl.CERT_REQUIRED)
+        if self.verify_mode is not None:
+            return self.verify_mode
+
+        return ssl.CERT_NONE if server else ssl.CERT_REQUIRED

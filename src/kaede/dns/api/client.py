@@ -3,41 +3,47 @@ import ipaddress
 from typing import Optional, Union, List, Dict, Tuple
 from dataclasses import dataclass, field
 
-from ...tls import TLSConfig
+from ...models import ClientLimits, ClientConfig
 from ...udp import UDPPort
-from ..models import DNSPort, DNSName, DNSRecordType, DNSRecordClass, DNSResponseCode, DNSQuestion, DNSRecords, EDNS, DNSMessage
+from ..models import DNSPort, DNSRecordName, DNSRecordType, DNSRecordClass, DNSResponseCode, DNSQuestion, DNSRecords, DNSExtension, DNSMessage
 from ..errors import DNSError, DNSFormatError, DNSConnectionError, DNSServerError, DNSSECError
-from ..protocol.handler import DNSTransport
-from ..protocol.udp import DNSUDPTransport
-from ..protocol.tcp import DNSTCPTransport
-from ..protocol.tls import DNSTLSTransport
-from ..protocol.quic import DNSQUICTransport
+from ..protocol.base import DNSProtocol
+from ..protocol.udp import DNSUDPProtocol
+from ..protocol.tcp import DNSTCPProtocol
+from ..protocol.tls import DNSTLSProtocol
+from ..protocol.quic import DNSQUICProtocol
 from ..helpers.dnssec import DNSSECValidator
+from .common import DNSLimits, DNSConfig
 
 @dataclass
-class DNSClientConfig:
+class DNSClientLimits(DNSLimits, ClientLimits):
+    max_retries: int = 3
+
+    max_cache_entries: int = 4096
+    max_cache_ttl: float = 86400
+
+    max_edns_payload_size: int = 1232
+
+    timeout_query: float = 3.0
+
+@dataclass
+class DNSClientConfig(DNSConfig, ClientConfig):
+    limits: DNSClientLimits = field(default_factory=lambda: DNSClientLimits())
+
     servers: List[Tuple[str, DNSPort]] = field(default_factory=lambda: [
         ("1.1.1.1", DNSPort("udp", UDPPort(53))),
         ("8.8.8.8", DNSPort("udp", UDPPort(53)))
     ])
 
-    timeout: float = 3.0
-    retries: int = 2
-
     cache: bool = True
 
-    payload_size: int = 1232
-
-    tls: Optional[TLSConfig] = None
     hostname: Optional[str] = None
 
     doh_path: str = "/dns-query"
 
 class DNSCache:
-    ceiling = 86400.0 # in seconds, the longest any answer is kept
-
-    def __init__(self, limit: int = 4096):
-        self.limit = limit
+    def __init__(self, limits: Optional[DNSClientLimits] = None):
+        self.limits = limits or DNSClientLimits()
         self.entries: Dict[Tuple[str, int, int], Tuple[float, Union[DNSResponseCode, int], DNSRecords]] = {}
 
     def get(self, key: Tuple[str, int, int], now: Optional[float] = None) -> Optional[Tuple[Union[DNSResponseCode, int], DNSRecords]]:
@@ -60,16 +66,16 @@ class DNSCache:
 
         now = time.monotonic() if now is None else now
 
-        if len(self.entries) >= self.limit:
+        if len(self.entries) >= self.limits.max_cache_entries:
             self.evict(now)
 
-        self.entries[key] = (now + min(ttl, DNSCache.ceiling), rcode, records)
+        self.entries[key] = (now + min(ttl, self.limits.max_cache_ttl), rcode, records)
 
     def evict(self, now: float):
         for key in [key for key, (expires, _, _) in self.entries.items() if expires <= now]:
             del self.entries[key]
 
-        while len(self.entries) >= self.limit:
+        while len(self.entries) >= self.limits.max_cache_entries:
             del self.entries[min(self.entries, key=lambda key: self.entries[key][0])]
 
     def clear(self):
@@ -79,8 +85,8 @@ class DNSClient:
     def __init__(self, *, config: Optional[DNSClientConfig] = None):
         self.config = config or DNSClientConfig()
 
-        self.cache = DNSCache() if self.config.cache else None
-        self.transports: Dict[Tuple, DNSTransport] = {}
+        self.cache = DNSCache(self.config.limits) if self.config.cache else None
+        self.transports: Dict[Tuple, DNSProtocol] = {}
         self.validator: Optional[DNSSECValidator] = None
 
     async def __aenter__(self) -> "DNSClient":
@@ -99,7 +105,7 @@ class DNSClient:
         message = DNSMessage(
             recursion_desired=recursion_desired,
             questions=[DNSQuestion(name, type, rclass)],
-            edns=EDNS(payload_size=self.config.payload_size, do=do)
+            edns=DNSExtension(payload_size=self.config.limits.max_edns_payload_size, do=do)
         )
 
         failures: List[DNSError] = []
@@ -117,27 +123,27 @@ class DNSClient:
         raise DNSConnectionError("No DNS server is configured.")
 
     async def attempt(self, host: str, port: DNSPort, message: DNSMessage) -> DNSMessage:
-        if port.type == "udp" and not port.secure:
-            response = await DNSUDPTransport((host, int(port.value)), retries=self.config.retries).query(message, timeout=self.config.timeout)
+        if port.type == "udp":
+            response = await DNSUDPProtocol((host, int(port.value)), limits=self.config.limits).query(message, timeout=self.config.limits.timeout_query)
 
             if not response.truncated:
                 return response
 
-            fallback = DNSTCPTransport((host, int(port.value)), connect_timeout=self.config.timeout)
+            fallback = DNSTCPProtocol((host, int(port.value)), limits=self.config.limits)
 
             try:
-                return await fallback.query(message, timeout=self.config.timeout)
+                return await fallback.query(message, timeout=self.config.limits.timeout_query)
 
             finally:
                 await fallback.close()
 
         if port.type in ("tcp", "quic", "https"):
-            return await self.keep(host, port).query(message, timeout=self.config.timeout)
+            return await self.keep(host, port).query(message, timeout=self.config.limits.timeout_query)
 
-        raise DNSConnectionError(f"The {port.type}{'+tls' if port.secure else ''} transport is not supported.")
+        raise DNSConnectionError(f"The {port.type} transport is not supported.")
 
-    def keep(self, host: str, port: DNSPort) -> DNSTransport:
-        key = (host, port.type, str(port.value), port.secure)
+    def keep(self, host: str, port: DNSPort) -> DNSProtocol:
+        key = (host, port.type, str(port.value))
         transport = self.transports.get(key)
 
         if transport is None:
@@ -145,22 +151,22 @@ class DNSClient:
 
         return transport
 
-    def build(self, host: str, port: DNSPort) -> DNSTransport:
+    def build(self, host: str, port: DNSPort) -> DNSProtocol:
         if port.type == "https":
-            from ..protocol.https import DNSHTTPSTransport
+            from ..protocol.https import DNSHTTPSProtocol
 
-            return DNSHTTPSTransport((host, int(port.value)), path=self.config.doh_path, tls=self.config.tls, hostname=self.config.hostname, connect_timeout=self.config.timeout)
+            return DNSHTTPSProtocol((host, int(port.value)), path=self.config.doh_path, tls=self.config.tls, hostname=self.config.hostname, limits=self.config.limits)
 
         if port.type == "quic":
-            return DNSQUICTransport((host, int(port.value)), tls=self.config.tls, hostname=self.config.hostname, connect_timeout=self.config.timeout)
+            return DNSQUICProtocol((host, int(port.value)), tls=self.config.tls, hostname=self.config.hostname, limits=self.config.limits)
 
-        if port.secure:
-            return DNSTLSTransport((host, int(port.value)), tls=self.config.tls, hostname=self.config.hostname, connect_timeout=self.config.timeout)
+        if self.config.tls:
+            return DNSTLSProtocol((host, int(port.value)), tls=self.config.tls, hostname=self.config.hostname, limits=self.config.limits)
 
-        return DNSTCPTransport((host, int(port.value)), connect_timeout=self.config.timeout)
+        return DNSTCPProtocol((host, int(port.value)), limits=self.config.limits)
 
     async def resolve(self, name: str, type: Union[DNSRecordType, int] = DNSRecordType.A, *, rclass: Union[DNSRecordClass, int] = DNSRecordClass.IN, validate: bool = False) -> DNSRecords:
-        key = (DNSName.key(name), DNSMessage.code(type), DNSMessage.classify(rclass))
+        key = (DNSRecordName.key(name), DNSMessage.code(type), DNSMessage.classify(rclass))
 
         if self.cache is not None and not validate:
             kept = self.cache.get(key)
@@ -212,10 +218,10 @@ class DNSClient:
             if alias is None:
                 return DNSRecords()
 
-            if DNSName.key(current) in visited:
+            if DNSRecordName.key(current) in visited:
                 raise DNSFormatError(f"The CNAME chain for {name!r} loops.")
 
-            visited.add(DNSName.key(current))
+            visited.add(DNSRecordName.key(current))
             current = alias.data.target
 
     def lifetime(self, response: DNSMessage, records: DNSRecords) -> float:

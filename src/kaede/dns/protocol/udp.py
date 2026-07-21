@@ -1,22 +1,32 @@
 import asyncio
 import secrets
-from typing import Optional, List, Tuple
+from typing import Optional, Tuple, TYPE_CHECKING
 
 from ...udp import UDPPort, UDPConnection
 from ...udp.errors import UDPError, UDPTimeoutError
 from ..models import DNSMessage
 from ..errors import DNSError, DNSConnectionError, DNSTimeoutError
-from .handler import DNSTransport
+from .base import DNSConnection, DNSProtocol
 
-class DNSUDPTransport(DNSTransport):
-    def __init__(self, dst: Tuple[str, int], *, retries: int = 2):
+if TYPE_CHECKING:
+    from ..api.client import DNSClientLimits
+
+class DNSUDPConnection(DNSConnection):
+    def __init__(self, transport, *, server: bool = False):
+        super().__init__(transport, stream=False, server=server)
+
+class DNSUDPProtocol(DNSProtocol):
+    def __init__(self, dst: Tuple[str, int], *, limits: Optional["DNSClientLimits"] = None):
+        from ..api.client import DNSClientLimits
+
         self.dst = dst
-        self.retries = retries
+        self.limits = limits or DNSClientLimits()
 
-    async def query(self, message: DNSMessage, *, timeout: float = 3.0) -> DNSMessage:
+    async def query(self, message: DNSMessage, *, timeout: Optional[float] = None) -> DNSMessage:
+        timeout = self.limits.timeout_query if timeout is None else timeout
         last: Optional[DNSError] = None
 
-        for _ in range(max(1, self.retries + 1)):
+        for _ in range(max(1, self.limits.max_retries + 1)):
             message.id = secrets.randbits(16)
 
             try:

@@ -10,7 +10,7 @@ from kaede.http.responses import JSONResponse, PlainTextResponse
 from kaede.http.errors import HTTPError
 from kaede.http.finalizer import finalize_response
 from kaede.http.api.server import HTTPServer, HTTPServerConfig, HTTPHandler
-from kaede.http.api.client import HTTPClient, HTTPClientConfig
+from kaede.http.api.client import HTTPClient, HTTPClientConfig, HTTPClientLimits
 from kaede.http.protocol.h2 import H2Settings, H2Frame, Frame, H2Connection, H2StreamError
 
 LOCAL = "127.0.0.1"
@@ -42,7 +42,7 @@ class Running:
         self.handler = handler or Echo()
 
     async def __aenter__(self):
-        await self.server.listen(self.handler, [(LOCAL, HTTPPort("tcp", TCPPort(0), True))])
+        await self.server.listen(self.handler, [(LOCAL, HTTPPort("tcp", TCPPort(0)))])
         return self.server
 
     async def __aexit__(self, *_):
@@ -54,7 +54,7 @@ def endpoint(server) -> str:
     return f"https://{LOCAL}:{int(port.value)}"
 
 def client(authority, *, versions=("HTTP/2.0", "HTTP/1.1")) -> HTTPClient:
-    config = HTTPClientConfig(versions=list(versions), connect_timeout=5)
+    config = HTTPClientConfig(versions=list(versions), limits=HTTPClientLimits(timeout_connection=5))
     config.tls = TLSConfig(cafile=authority.ca)
 
     return HTTPClient(config=config)
@@ -238,14 +238,14 @@ class TestECH:
         server_certfile, server_keyfile = server_certificate
 
         config = HTTPServerConfig(versions=["HTTP/1.1", "HTTP/2.0"])
-        config.tls = TLSConfig(certfile=server_certfile, keyfile=server_keyfile, verify_mode=CERT_NONE, ech_pemfiles=[ech_keys.pemfile])
+        config.tls = TLSConfig(certfile=server_certfile, keyfile=server_keyfile, verify_mode=CERT_NONE, echfile=ech_keys.pemfile)
 
         server = HTTPServer(config=config)
 
         try:
-            await server.listen(Echo(), [(LOCAL, HTTPPort("tcp", TCPPort(0), True))])
+            await server.listen(Echo(), [(LOCAL, HTTPPort("tcp", TCPPort(0)))])
 
-            client_config = HTTPClientConfig(versions=["HTTP/2.0", "HTTP/1.1"], connect_timeout=5)
+            client_config = HTTPClientConfig(versions=["HTTP/2.0", "HTTP/1.1"], limits=HTTPClientLimits(timeout_connection=5))
             client_config.tls = TLSConfig(cafile=authority.ca)
             client_config.ech = ech_keys.configlist
 

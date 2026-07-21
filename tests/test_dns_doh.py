@@ -1,5 +1,6 @@
 import ipaddress
 from ssl import CERT_NONE
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,8 +9,9 @@ from kaede.tcp import TCPPort
 from kaede.udp import UDPPort
 from kaede.http.models import HTTPPort
 from kaede.http.api.server import HTTPServer, HTTPServerConfig
-from kaede.dns import DNSPort, DNSRecordType, DNSRecords, DNSMessage, DNSQuestion, DNSClient, DNSClientConfig
-from kaede.dns.protocol.https import DNSHTTPSHandler, DNSHTTPSTransport
+from kaede.dns import DNSPort, DNSRecordType, DNSRecords, DNSMessage, DNSQuestion, DNSClient, DNSClientConfig, DNSClientLimits
+from kaede.dns.protocol.https import DNSHTTPSProtocol
+from kaede.dns.protocol.handler import DNSHTTPSHandler
 from kaede.dns.api.server import DNSServer, DNSServerConfig, DNSHandler
 from kaede.dns.errors import DNSFormatError
 
@@ -40,19 +42,19 @@ class Running:
         config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE)
 
         self.server = HTTPServer(config=config)
-        self.handler = DNSHTTPSHandler(resolve)
+        self.handler = DNSHTTPSHandler(SimpleNamespace(resolve=resolve))
 
     async def __aenter__(self):
-        await self.server.listen(self.handler, [(LOCAL, HTTPPort("tcp", TCPPort(0), True))])
+        await self.server.listen(self.handler, [(LOCAL, HTTPPort("tcp", TCPPort(0)))])
         return self.server
 
     async def __aexit__(self, *_):
         await self.server.close(timeout=2)
 
-def transport(server, authority) -> DNSHTTPSTransport:
+def transport(server, authority) -> DNSHTTPSProtocol:
     host, port = server.ports[0]
 
-    return DNSHTTPSTransport((LOCAL, int(port.value)), tls=TLSConfig(cafile=authority.ca), hostname="localhost", connect_timeout=5)
+    return DNSHTTPSProtocol((LOCAL, int(port.value)), tls=TLSConfig(cafile=authority.ca), hostname="localhost", limits=DNSClientLimits(timeout_connection=5))
 
 class TestDoH:
     async def test_a_query_over_doh(self, server_certificate, authority):
@@ -90,8 +92,8 @@ class TestDoH:
             host, port = server.ports[0]
 
             config = DNSClientConfig(
-                servers=[(LOCAL, DNSPort("https", int(port.value), True))],
-                timeout=5.0, retries=0, cache=False,
+                servers=[(LOCAL, DNSPort("https", int(port.value)))],
+                limits=DNSClientLimits(timeout_query=5.0, max_retries=0), cache=False,
                 tls=TLSConfig(cafile=authority.ca), hostname="localhost"
             )
 
@@ -161,7 +163,7 @@ class TestServerBridge:
         config = DNSServerConfig(tls=TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE))
         server = DNSServer(config=config)
 
-        await server.listen(DNSHandler(serve), [(LOCAL, DNSPort("https", TCPPort(0), True))])
+        await server.listen(DNSHandler(serve), [(LOCAL, DNSPort("https", TCPPort(0)))])
 
         try:
             host, port = server.ports[0]
@@ -169,8 +171,8 @@ class TestServerBridge:
             assert port.type == "https"
 
             client_config = DNSClientConfig(
-                servers=[(LOCAL, DNSPort("https", int(port.value), True))],
-                timeout=5.0, retries=0, cache=False,
+                servers=[(LOCAL, DNSPort("https", int(port.value)))],
+                limits=DNSClientLimits(timeout_query=5.0, max_retries=0), cache=False,
                 tls=TLSConfig(cafile=authority.ca), hostname="localhost"
             )
 

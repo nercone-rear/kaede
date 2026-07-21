@@ -3,35 +3,37 @@ import json
 import xxhash
 import ipaddress
 from enum import Enum
-from typing import Any, Optional, Literal, List, Dict, Tuple, Union, TypeVar
+from typing import Any, Optional, Literal, List, Dict, Tuple, Union, TypeVar, TYPE_CHECKING
 from dataclasses import dataclass, field
 from collections.abc import AsyncIterator
 
 from ..url import URL
 from ..tcp import TCPPort
 from ..udp import UDPPort
-from ..protocol import Limits
 from ..constants import Characters
 from .headers import CommaHeader, ETag, Cookie, SetCookie
+
+if TYPE_CHECKING:
+    from .api.common import HTTPLimits
 
 T = TypeVar("T")
 
 HTTPVersion = Literal["HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"]
 HTTPMethod  = Literal["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
 
-class HTTPBroadRole(Enum):
-    CLIENT = "Client"
-    SERVER = "Server"
+@dataclass
+class HTTPPort:
+    type: Literal["uds", "tcp", "quic"] = "tcp"
+    value: Union[str, int, TCPPort, UDPPort] = TCPPort(80)
 
-    def valid(self, specific: "HTTPRole") -> bool:
-        if specific == HTTPRole.USER_AGENT:
-            return self == HTTPBroadRole.CLIENT
-        elif specific != HTTPRole.USER_AGENT:
-            return self == HTTPBroadRole.SERVER
-
-    @staticmethod
-    def from_specific(specific: "HTTPRole") -> "HTTPBroadRole":
-        return HTTPBroadRole.CLIENT if specific == HTTPRole.USER_AGENT else HTTPBroadRole.SERVER
+    @property
+    def valid(self) -> bool:
+        if self.type == "uds":
+            return isinstance(self.value, str)
+        elif self.type == "tcp":
+            return isinstance(self.value, TCPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
+        elif self.type == "quic":
+            return isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
 
 class HTTPRole(Enum):
     USER_AGENT = "User Agent"
@@ -50,20 +52,19 @@ class HTTPRole(Enum):
     def from_broad(broad: "HTTPBroadRole", server_default: Optional["HTTPRole"]) -> "HTTPRole":
         return HTTPRole.USER_AGENT if broad == HTTPBroadRole.CLIENT else (server_default or HTTPRole.ORIGIN)
 
-@dataclass
-class HTTPPort:
-    type: Literal["uds", "tcp", "quic"] = "tcp"
-    value: Union[str, int, TCPPort, UDPPort] = TCPPort(80)
-    secure: bool = False
+class HTTPBroadRole(Enum):
+    CLIENT = "Client"
+    SERVER = "Server"
 
-    @property
-    def valid(self) -> bool:
-        if self.type == "uds":
-            return isinstance(self.value, str)
-        elif self.type == "tcp":
-            return isinstance(self.value, TCPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)
-        elif self.type == "quic":
-            return (isinstance(self.value, UDPPort) or (isinstance(self.value, int) and 0 <= self.value < 65536)) and self.secure
+    def valid(self, specific: "HTTPRole") -> bool:
+        if specific == HTTPRole.USER_AGENT:
+            return self == HTTPBroadRole.CLIENT
+        elif specific != HTTPRole.USER_AGENT:
+            return self == HTTPBroadRole.SERVER
+
+    @staticmethod
+    def from_specific(specific: "HTTPRole") -> "HTTPBroadRole":
+        return HTTPBroadRole.CLIENT if specific == HTTPRole.USER_AGENT else HTTPBroadRole.SERVER
 
 class HTTPHeaderCase(Enum):
     TITLECASE = "Title-Case" # for HTTP/1.0
@@ -216,19 +217,6 @@ class HTTPHeaders:
         return "".join(f"{case.apply(name)}: {value}\r\n" for name, value in self.fields)
 
 @dataclass
-class HTTPLimits(Limits):
-    max_message_size: int = 1073741824    # in bytes, The total size of the HTTP message allowed for reception.
-    max_message_offload_size: int = 98304 # in bytes, The total size of an HTTP message that can be held in memory.
-
-    max_message_body_size: int = 1073741824    # in bytes, The size of the HTTP message body allowed for reception.
-    max_message_body_offload_size: int = 65536 # in bytes, The size of the HTTP message body that can be held in memory.
-
-    max_startline_size: int = 8192  # in bytes, the request/status line ceiling
-    max_headers_size:   int = 65536 # in bytes, the whole header (or trailer) block
-    max_header_count:   int = 128   # the number of header fields allowed in one block
-    max_chunk_ext_size: int = 4096  # in bytes, one chunk size line with its extensions
-
-@dataclass
 class HTTPMessage:
     version: HTTPVersion = "HTTP/1.1"
 
@@ -255,7 +243,7 @@ class HTTPMessage:
     def json(self) -> Any:
         return json.loads(self.text)
 
-    def offload(self, limits: HTTPLimits) -> Optional[bytes]:
+    def offload(self, limits: "HTTPLimits") -> Optional[bytes]:
         if isinstance(self.body, str):
             filepath = self.body
             filesize = os.stat(filepath).st_size
@@ -283,7 +271,7 @@ class HTTPRequest(HTTPMessage):
         self.refresh()
 
     def refresh(self):
-        self.url = URL.from_target(self.target, self.scheme, self.headers.get("Host", ""))
+        self.url = URL.parse(target=self.target, scheme=self.scheme, authority=self.headers.get("Host", ""))
 
     @property
     def scheme(self) -> str:

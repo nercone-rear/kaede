@@ -14,7 +14,7 @@ from kaede.tls import TLSConfig
 from kaede.tcp import TCPPort
 from kaede.http.models import HTTPPort, HTTPHeaders, HTTPResponse
 from kaede.http.api.server import HTTPServer, HTTPServerConfig, HTTPHandler
-from kaede.http.api.client import HTTPClient, HTTPClientConfig
+from kaede.http.api.client import HTTPClient, HTTPClientConfig, HTTPClientLimits
 
 LOCAL = "127.0.0.1"
 
@@ -40,7 +40,7 @@ class Running:
         self.handler = handler
 
     async def __aenter__(self):
-        await self.server.listen(self.handler, [(LOCAL, HTTPPort("tcp", TCPPort(0), True))])
+        await self.server.listen(self.handler, [(LOCAL, HTTPPort("tcp", TCPPort(0)))])
         return self.server
 
     async def __aexit__(self, *_):
@@ -52,7 +52,7 @@ def address(server) -> str:
     return f"https://{NAME}:{int(server.ports[0][1].value)}"
 
 def client(authority) -> HTTPClient:
-    return HTTPClient(config=HTTPClientConfig(versions=["HTTP/1.1"], connect_timeout=5, tls=TLSConfig(cafile=authority.ca)))
+    return HTTPClient(config=HTTPClientConfig(versions=["HTTP/1.1"], limits=HTTPClientLimits(timeout_connection=5), tls=TLSConfig(cafile=authority.ca)))
 
 class TestLearning:
     async def test_a_policy_on_a_secure_response_is_recorded(self, server_certificate, authority):
@@ -87,7 +87,7 @@ class TestLearning:
                 assert not http.store.secure(LOCAL)
 
     async def test_a_policy_is_not_learned_when_the_store_is_off(self, server_certificate, authority):
-        config = HTTPClientConfig(versions=["HTTP/1.1"], connect_timeout=5, tls=TLSConfig(cafile=authority.ca), hsts=False)
+        config = HTTPClientConfig(versions=["HTTP/1.1"], limits=HTTPClientLimits(timeout_connection=5), tls=TLSConfig(cafile=authority.ca), hsts=False)
 
         async with Running(Strict(), server_certificate) as server:
             async with HTTPClient(config=config) as http:
@@ -99,7 +99,7 @@ class TestUpgrading:
     """§8.3 step 5: the scheme is replaced with https, and an explicit port 80 becomes 443."""
 
     def upgraded(self, http, url: str) -> URL:
-        return http.upgrade(URL.parse(url))
+        return http.upgrade(URL.parse_absolute(target=url))
 
     def test_a_known_host_upgrades_the_scheme(self):
         http = HTTPClient()

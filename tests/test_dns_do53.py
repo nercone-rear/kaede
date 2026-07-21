@@ -6,8 +6,8 @@ import pytest
 from kaede.tcp import TCPPort
 from kaede.udp import UDPPort, UDPConnection
 from kaede.dns import (
-    DNSPort, DNSRecordType, DNSResponseCode, DNSName, DNSRecord, DNSRecords,
-    DNSMessage, DNSCache, DNSClient, DNSClientConfig, DNSServer, DNSServerConfig, DNSHandler
+    DNSPort, DNSRecordType, DNSResponseCode, DNSRecordName, DNSRecord, DNSRecords,
+    DNSMessage, DNSCache, DNSClient, DNSClientConfig, DNSClientLimits, DNSServer, DNSServerConfig, DNSHandler
 )
 from kaede.dns.errors import DNSError, DNSServerError, DNSTimeoutError
 from kaede.dns.records import SOARecordData, TXTRecordData
@@ -46,8 +46,8 @@ async def resolver(connection):
 
                 alias = found.first(DNSRecordType.CNAME)
 
-                if alias is None or question.type == DNSRecordType.CNAME or DNSName.key(name) in visited:
-                    if not found and DNSName.key(name) not in {DNSName.key(record.name) for record in ZONE}:
+                if alias is None or question.type == DNSRecordType.CNAME or DNSRecordName.key(name) in visited:
+                    if not found and DNSRecordName.key(name) not in {DNSRecordName.key(record.name) for record in ZONE}:
                         answer.rcode = DNSResponseCode.NXDOMAIN
                         answer.authorities.append(START)
 
@@ -56,7 +56,7 @@ async def resolver(connection):
 
                     break
 
-                visited.add(DNSName.key(name))
+                visited.add(DNSRecordName.key(name))
                 name = alias.data.target
 
         await connection.send(answer)
@@ -97,7 +97,7 @@ class Running:
 def client(server, *, kinds=("udp",), cache=False) -> DNSClient:
     servers = [(host, port) for host, port in server.ports if port.type in kinds]
 
-    return DNSClient(config=DNSClientConfig(servers=servers, timeout=2.0, retries=0, cache=cache))
+    return DNSClient(config=DNSClientConfig(servers=servers, limits=DNSClientLimits(timeout_query=2.0, max_retries=0), cache=cache))
 
 class TestQueries:
     async def test_a_query_over_udp(self):
@@ -160,13 +160,13 @@ class TestTruncation:
         async with Running() as server:
             async with client(server, kinds=("udp",)) as resolver_client:
                 # Reach the transport directly so the TC fallback does not kick in.
-                from kaede.dns.protocol.udp import DNSUDPTransport
-                from kaede.dns import DNSQuestion, EDNS
+                from kaede.dns.protocol.udp import DNSUDPProtocol
+                from kaede.dns import DNSQuestion, DNSExtension
 
                 host, port = [entry for entry in server.ports if entry[1].type == "udp"][0]
-                query = DNSMessage(questions=[DNSQuestion("big.example.test", DNSRecordType.TXT)], edns=EDNS(payload_size=1232))
+                query = DNSMessage(questions=[DNSQuestion("big.example.test", DNSRecordType.TXT)], edns=DNSExtension(payload_size=1232))
 
-                response = await DNSUDPTransport((host, int(port.value)), retries=0).query(query, timeout=2.0)
+                response = await DNSUDPProtocol((host, int(port.value)), limits=DNSClientLimits(max_retries=0)).query(query, timeout=2.0)
 
                 assert response.truncated
                 assert len(response.answers) == 0
@@ -221,7 +221,7 @@ class TestRobustness:
         async with Running(silent) as server:
             resolver_client = DNSClient(config=DNSClientConfig(
                 servers=[entry for entry in server.ports if entry[1].type == "udp"],
-                timeout=0.3, retries=1, cache=False
+                limits=DNSClientLimits(timeout_query=0.3, max_retries=1), cache=False
             ))
 
             with pytest.raises(DNSTimeoutError):
@@ -265,7 +265,7 @@ class TestCaching:
         assert cache.get(("example.test", 1, 1), now=1301.0) is None
 
     def test_the_cache_is_bounded(self):
-        cache = DNSCache(limit=4)
+        cache = DNSCache(DNSClientLimits(max_cache_entries=4))
 
         for index in range(10):
             cache.put((f"name{index}.test", 1, 1), 0, DNSRecords(), ttl=300, now=1000.0 + index)

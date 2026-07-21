@@ -3,10 +3,11 @@ import ipaddress
 
 import pytest
 
+from kaede.tls import TLSConfig
 from kaede.udp import UDPPort
 from kaede.tcp import TCPPort
 from kaede.quic.tls import QTLS
-from kaede.dns import DNSPort, DNSRecordType, DNSResponseCode, DNSClient, DNSClientConfig
+from kaede.dns import DNSPort, DNSRecordType, DNSResponseCode, DNSClient, DNSClientConfig, DNSClientLimits
 from kaede.dns.errors import DNSServerError
 from kaede.dns.helpers import DNSSECValidator
 
@@ -21,16 +22,17 @@ def resolver(kind: str):
     if kind == "tcp":
         return [("1.1.1.1", DNSPort("tcp", TCPPort(53))), ("8.8.8.8", DNSPort("tcp", TCPPort(53)))]
     if kind == "tls":
-        return [("1.1.1.1", DNSPort("tcp", TCPPort(853), True)), ("8.8.8.8", DNSPort("tcp", TCPPort(853), True))]
+        return [("1.1.1.1", DNSPort("tcp", TCPPort(853))), ("8.8.8.8", DNSPort("tcp", TCPPort(853)))]
     if kind == "quic":
-        return [("94.140.14.140", DNSPort("quic", UDPPort(853), True))] # AdGuard, a stable DoQ endpoint
+        return [("94.140.14.140", DNSPort("quic", UDPPort(853)))] # AdGuard, a stable DoQ endpoint
     if kind == "https":
-        return [("cloudflare-dns.com", DNSPort("https", 443, True)), ("dns.google", DNSPort("https", 443, True))]
+        return [("cloudflare-dns.com", DNSPort("https", 443)), ("dns.google", DNSPort("https", 443))]
 
 def client(kind: str) -> DNSClient:
     hostname = {"https": "cloudflare-dns.com", "tls": "cloudflare-dns.com", "quic": "dns.adguard-dns.com"}.get(kind)
+    tls = TLSConfig() if kind == "tls" else None # DoT is only selected when the client config carries a TLSConfig
 
-    return DNSClient(config=DNSClientConfig(servers=resolver(kind), timeout=8.0, retries=1, cache=False, hostname=hostname))
+    return DNSClient(config=DNSClientConfig(servers=resolver(kind), limits=DNSClientLimits(timeout_query=8.0, retries=1), cache=False, tls=tls, hostname=hostname))
 
 class TestDo53:
     async def test_a_over_udp(self):
@@ -88,7 +90,7 @@ class TestSecure:
 
 class TestDNSSEC:
     async def test_a_signed_zone_validates(self):
-        async with DNSClient(config=DNSClientConfig(servers=resolver("udp"), timeout=8.0, cache=False)) as dns:
+        async with DNSClient(config=DNSClientConfig(servers=resolver("udp"), limits=DNSClientLimits(timeout_query=8.0), cache=False)) as dns:
             records = await dns.resolve("cloudflare.com", DNSRecordType.A, validate=True)
 
             assert records
@@ -96,7 +98,7 @@ class TestDNSSEC:
     async def test_an_unsigned_zone_is_reported(self):
         from kaede.dns.errors import DNSSECError
 
-        async with DNSClient(config=DNSClientConfig(servers=resolver("udp"), timeout=8.0, cache=False)) as dns:
+        async with DNSClient(config=DNSClientConfig(servers=resolver("udp"), limits=DNSClientLimits(timeout_query=8.0), cache=False)) as dns:
             # example.com is signed; a truly unsigned name should raise rather than validate.
             try:
                 await dns.resolve("example.com", DNSRecordType.A, validate=True)

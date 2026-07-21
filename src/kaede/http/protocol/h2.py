@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional, Union, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass
 from collections.abc import AsyncIterator
 
@@ -13,7 +13,8 @@ from ..errors import HTTPError
 from ..finalizer import finalize_response
 from ..helpers.compression import compress, decompress
 from ..helpers.hpack import HPACKEncoder, HPACKDecoder, HPACKError
-from .connection import HTTPConnection, HTTPState
+from .common import HTTPState
+from .base import HTTPConnection, HTTPProtocol
 
 class Frame:
     DATA          = 0x0
@@ -113,7 +114,7 @@ class H2Settings:
             if number in H2Settings.IDS:
                 setattr(self, H2Settings.IDS[number], value)
 
-class H2Session:
+class H2Protocol(HTTPProtocol):
     CEILING = 0x7FFFFFFF
     PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
@@ -167,12 +168,12 @@ class H2Session:
 
     async def start(self):
         if self.role == HTTPBroadRole.SERVER:
-            preface = await self.transport.receive_exactly(len(H2Session.PREFACE))
+            preface = await self.transport.receive_exactly(len(H2Protocol.PREFACE))
 
-            if preface != H2Session.PREFACE:
+            if preface != H2Protocol.PREFACE:
                 raise H2Error(Code.PROTOCOL_ERROR, "The client preface is wrong.")
         else:
-            await self.transport.send(H2Session.PREFACE)
+            await self.transport.send(H2Protocol.PREFACE)
 
         await self.write(H2Frame(Frame.SETTINGS, 0, 0, self.local.pack()))
 
@@ -489,7 +490,7 @@ class H2Session:
             for stream in self.streams.values():
                 stream.send_window += delta
 
-                if stream.send_window > H2Session.CEILING:
+                if stream.send_window > H2Protocol.CEILING:
                     raise H2Error(Code.FLOW_CONTROL_ERROR, "SETTINGS_INITIAL_WINDOW_SIZE overflowed a stream window.")
 
         await self.write(H2Frame(Frame.SETTINGS, Flag.ACK, 0, b""))
@@ -527,14 +528,14 @@ class H2Session:
         if frame.stream == 0:
             self.send_window += increment
 
-            if self.send_window > H2Session.CEILING:
+            if self.send_window > H2Protocol.CEILING:
                 raise H2Error(Code.FLOW_CONTROL_ERROR, "The connection send window exceeded 2^31-1.")
 
         elif frame.stream in self.streams:
             stream = self.streams[frame.stream]
             stream.send_window += increment
 
-            if stream.send_window > H2Session.CEILING:
+            if stream.send_window > H2Protocol.CEILING:
                 raise H2StreamError(Code.FLOW_CONTROL_ERROR, frame.stream, "A stream send window exceeded 2^31-1.")
 
         await self.wake()
@@ -637,7 +638,7 @@ class H2Connection(HTTPConnection):
     REQUEST_PSEUDO  = frozenset({":method", ":scheme", ":path", ":authority"})
     RESPONSE_PSEUDO = frozenset({":status"})
 
-    def __init__(self, session: H2Session, stream: int, *, role: HTTPBroadRole):
+    def __init__(self, session: H2Protocol, stream: int, *, role: HTTPBroadRole):
         super().__init__(("", None), ("", None), transport=session.transport, version="HTTP/2.0", limits=session.limits, observer=session.observer)
 
         self.session = session

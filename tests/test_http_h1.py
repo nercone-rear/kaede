@@ -5,13 +5,13 @@ import pytest
 
 from kaede.tls import TLSConfig
 from kaede.tcp import TCPPort
-from kaede.uds import UDSAddress
+from kaede.uds import UDSPort
 from kaede.http.models import HTTPPort, HTTPHeaders, HTTPResponse
 from kaede.http.responses import PlainTextResponse, JSONResponse
 from kaede.http.errors import HTTPError
 from kaede.http.finalizer import finalize_response
 from kaede.http.api.server import HTTPServer, HTTPServerConfig, HTTPServerLimits, HTTPHandler
-from kaede.http.api.client import HTTPClient, HTTPClientConfig
+from kaede.http.api.client import HTTPClient, HTTPClientConfig, HTTPClientLimits
 
 LOCAL = "127.0.0.1"
 
@@ -49,7 +49,7 @@ class Running:
         if self.uds is not None:
             port = HTTPPort("uds", self.uds)
         else:
-            port = HTTPPort("tcp", TCPPort(0), self.certificate is not None)
+            port = HTTPPort("tcp", TCPPort(0))
 
         await self.server.listen(self.handler, [(LOCAL, port)])
         return self.server
@@ -63,7 +63,7 @@ def endpoint(server, *, scheme="http") -> str:
     return f"{scheme}://{LOCAL}:{int(port.value)}"
 
 def client(*, authority=None) -> HTTPClient:
-    config = HTTPClientConfig(versions=["HTTP/1.1"], connect_timeout=5)
+    config = HTTPClientConfig(versions=["HTTP/1.1"], limits=HTTPClientLimits(timeout_connection=5))
 
     if authority is not None:
         config.tls = TLSConfig(cafile=authority.ca)

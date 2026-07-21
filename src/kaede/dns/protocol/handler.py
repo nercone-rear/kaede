@@ -1,121 +1,119 @@
 import asyncio
-from typing import Optional, Tuple
 
-from ...tcp.errors import TCPError, TCPClosedError, TCPLostError, TCPTimeoutError
-from ...udp.errors import UDPError, UDPClosedError, UDPLostError, UDPTimeoutError
-from ...quic.errors import QUICError, QUICClosedError, QUICLostError, QUICStreamError, QUICTimeoutError
+from ...udp import UDPHandler
+from ...tcp import TCPHandler
+from ...quic import QUICHandler
+from ...quic.errors import QUICError
 from ..models import DNSMessage
-from ..errors import DNSError, DNSFormatError, DNSClosedError, DNSTimeoutError
+from ..errors import DNSError
+from .udp import DNSUDPConnection
+from .tcp import DNSTCPConnection
+from .tls import DNSTLSConnection
+from .quic import DNSQUICConnection
 
-class DNSTransport:
-    async def query(self, message: DNSMessage, *, timeout: float = 3.0) -> DNSMessage:
-        raise NotImplementedError()
-
-    async def close(self):
-        raise NotImplementedError()
-
-class DNSConnection:
-    fallback_limit = 512 # in bytes, what a peer without EDNS accepts over UDP
-
-    def __init__(self, transport, *, stream: bool, server: bool = False):
-        self.transport = transport
-        self.stream = stream
+class DNSUDPHandler(UDPHandler):
+    def __init__(self, server: "object"):
+        super().__init__(self.handle)
         self.server = server
 
-        self.limit: Optional[int] = None
+    async def handle(self, connection):
+        await self.server.converse(DNSUDPConnection(connection, server=True))
 
-    @property
-    def client(self) -> Tuple[str, int]:
-        return (self.transport.dst[0], int(self.transport.dst[1]))
+class DNSTCPHandler(TCPHandler):
+    def __init__(self, server: "object"):
+        super().__init__(self.handle)
+        self.server = server
 
-    @property
-    def closed(self) -> bool:
-        return self.transport.closed
+    async def handle(self, connection):
+        await self.server.converse(DNSTCPConnection(connection, server=True))
 
-    async def send(self, message: DNSMessage):
-        wire = message.pack()
+class DNSTLSHandler(TCPHandler):
+    def __init__(self, server: "object"):
+        super().__init__(self.handle)
+        self.server = server
 
-        if self.stream:
-            if len(wire) > 65535:
-                raise DNSFormatError(f"The message is {len(wire)} bytes, but the stream length prefix carries at most 65535.")
+    async def handle(self, connection):
+        await self.server.converse(DNSTLSConnection(connection, server=True))
 
-            await self.deliver(len(wire).to_bytes(2, "big") + wire)
-            return
+class DNSQUICHandler(QUICHandler):
+    def __init__(self, server: "object"):
+        super().__init__(self.handle)
+        self.server = server
 
-        if self.server:
-            limit = self.limit or DNSConnection.fallback_limit
-
-            if len(wire) > limit:
-                wire = self.shrink(message).pack()
-
-        await self.deliver(wire)
-
-    def shrink(self, message: DNSMessage) -> DNSMessage:
-        clipped = message.reply(rcode=message.rcode)
-
-        clipped.response = message.response
-        clipped.authoritative = message.authoritative
-        clipped.recursion_available = message.recursion_available
-        clipped.truncated = True
-        clipped.edns = message.edns
-
-        return clipped
-
-    async def receive(self, timeout: Optional[float] = None) -> DNSMessage:
-        while True:
-            raw = await self.fetch(timeout)
-
-            try:
-                message = DNSMessage.unpack(raw)
-
-            except DNSError:
-                if not self.server:
-                    raise
-
-                await self.refuse(raw)
-                continue
-
-            if self.server and not message.response:
-                self.limit = max(message.edns.payload_size, DNSConnection.fallback_limit) if message.edns is not None else DNSConnection.fallback_limit
-
-            return message
-
-    async def fetch(self, timeout: Optional[float]) -> bytes:
-        try:
-            if self.stream:
-                return await (self.framed() if timeout is None else asyncio.wait_for(self.framed(), timeout))
-
-            return await self.transport.receive(timeout=timeout)
-
-        except (asyncio.TimeoutError, TCPTimeoutError, UDPTimeoutError, QUICTimeoutError):
-            raise DNSTimeoutError(f"No DNS message arrived within {timeout} seconds.")
-
-        except (TCPClosedError, TCPLostError, UDPClosedError, UDPLostError, QUICClosedError, QUICLostError, QUICStreamError) as e:
-            raise DNSClosedError(f"The DNS transport ended: {e}") from e
-
-    async def framed(self) -> bytes:
-        header = await self.transport.receive_exactly(2)
-
-        return await self.transport.receive_exactly(int.from_bytes(header, "big"))
-
-    async def deliver(self, wire: bytes):
-        try:
-            await self.transport.send(wire)
-
-        except (TCPClosedError, TCPLostError, UDPClosedError, UDPLostError, QUICClosedError, QUICLostError, QUICStreamError) as e:
-            raise DNSClosedError(f"The DNS transport ended: {e}") from e
-
-    async def refuse(self, raw: bytes):
-        if len(raw) < 12 or (raw[2] & 0x80):
-            return
+    async def handle(self, connection):
+        tasks = set()
 
         try:
-            wire = DNSMessage(id=int.from_bytes(raw[0:2], "big"), response=True, rcode=1).pack()
+            while True:
+                stream = await connection.accept(timeout=self.server.config.limits.idle_timeout)
 
-            await self.deliver(len(wire).to_bytes(2, "big") + wire if self.stream else wire)
+                task = asyncio.ensure_future(self.server.confer(DNSQUICConnection(connection, stream, server=True)))
+                tasks.add(task)
+                task.add_done_callback(tasks.discard)
 
-        except (DNSError, TCPError, UDPError, QUICError):
+        except QUICError:
             pass
 
-    async def close(self):
-        await self.transport.close()
+        finally:
+            for task in set(tasks):
+                task.cancel()
+
+class DNSHTTPSHandler:
+    MEDIA = "application/dns-message"
+
+    def __init__(self, server: "object"):
+        self.server = server
+
+    async def on_connection(self, connection):
+        import base64
+        from ...http.models import HTTPResponse, HTTPHeaders
+        from ...http.errors import HTTPError
+        from ...http.finalizer import finalize_response
+
+        request = await connection.receive()
+
+        try:
+            wire = self.extract(request, base64)
+
+        except HTTPError as e:
+            await connection.send(await finalize_response(HTTPResponse(status_code=e.code, headers=HTTPHeaders(), body=(e.message or "").encode(), compression=False)))
+            return
+
+        try:
+            query = DNSMessage.unpack(wire)
+            answer = self.server.resolve(query)
+
+            if hasattr(answer, "__await__"):
+                answer = await answer
+
+        except DNSError:
+            answer = DNSMessage(response=True, rcode=1)
+
+        headers = HTTPHeaders([("Content-Type", DNSHTTPSHandler.MEDIA)])
+        await connection.send(await finalize_response(HTTPResponse(status_code=200, headers=headers, body=answer.pack(), compression=False)))
+
+    def extract(self, request, base64) -> bytes:
+        from ...http.errors import HTTPError
+
+        if request.method == "POST":
+            if request.headers.get("Content-Type", "").split(";")[0].strip().lower() != DNSHTTPSHandler.MEDIA:
+                raise HTTPError(415, "Unsupported Media Type")
+
+            return request.body if isinstance(request.body, bytes) else b""
+
+        if request.method == "GET":
+            encoded = request.url.params.get("dns", [""])[0]
+
+            if not encoded:
+                raise HTTPError(400, "Bad Request")
+
+            try:
+                return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+
+            except (ValueError, TypeError):
+                raise HTTPError(400, "Bad Request")
+
+        raise HTTPError(405, "Method Not Allowed")
+
+    async def on_websocket(self, connection):
+        await connection.close(1011, "WebSocket is not part of DoH.")

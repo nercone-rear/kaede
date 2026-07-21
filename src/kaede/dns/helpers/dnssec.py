@@ -5,9 +5,9 @@ from typing import Optional, Union, Dict, List, Tuple
 from dataclasses import replace
 
 from ...tls.openssl import OpenSSL, VOID_P
-from ..models import DNSName, DNSRecordType, DNSRecordData, DNSRecord, DNSRecords, DNSMessage
+from ..errors import DNSSECError
+from ..models import DNSRecordName, DNSRecordType, DNSRecordData, DNSRecord, DNSRecords, DNSMessage
 from ..records import NameRecordData, SOARecordData, MXRecordData, SRVRecordData, DSRecordData, DNSKEYRecordData, RRSIGRecordData
-from ..errors import DNSError, DNSSECError
 
 class DNSSECCrypto:
     RSA     = bytes([0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01])
@@ -25,18 +25,15 @@ class DNSSECCrypto:
         SIZE = ctypes.c_size_t
         STR  = ctypes.c_char_p
 
-        bind = self.library.bind
-        crypto = self.library.crypto
-
-        self.context_new  = bind(crypto, "EVP_MD_CTX_new", VOID_P, [])
-        self.context_free = bind(crypto, "EVP_MD_CTX_free", VOID, [VOID_P])
-        self.initialize   = bind(crypto, "EVP_DigestVerifyInit", INT, [VOID_P, VOID_P, VOID_P, VOID_P, VOID_P])
-        self.check        = bind(crypto, "EVP_DigestVerify", INT, [VOID_P, STR, SIZE, STR, SIZE])
-        self.key_free     = bind(crypto, "EVP_PKEY_free", VOID, [VOID_P])
-        self.decode       = bind(crypto, "d2i_PUBKEY", VOID_P, [VOID_P, ctypes.POINTER(VOID_P), LONG])
-        self.sha256       = bind(crypto, "EVP_sha256", VOID_P, [])
-        self.sha384       = bind(crypto, "EVP_sha384", VOID_P, [])
-        self.sha512       = bind(crypto, "EVP_sha512", VOID_P, [])
+        self.context_new  = self.library.bind(self.library.crypto, "EVP_MD_CTX_new", VOID_P, [])
+        self.context_free = self.library.bind(self.library.crypto, "EVP_MD_CTX_free", VOID, [VOID_P])
+        self.initialize   = self.library.bind(self.library.crypto, "EVP_DigestVerifyInit", INT, [VOID_P, VOID_P, VOID_P, VOID_P, VOID_P])
+        self.check        = self.library.bind(self.library.crypto, "EVP_DigestVerify", INT, [VOID_P, STR, SIZE, STR, SIZE])
+        self.key_free     = self.library.bind(self.library.crypto, "EVP_PKEY_free", VOID, [VOID_P])
+        self.decode       = self.library.bind(self.library.crypto, "d2i_PUBKEY", VOID_P, [VOID_P, ctypes.POINTER(VOID_P), LONG])
+        self.sha256       = self.library.bind(self.library.crypto, "EVP_sha256", VOID_P, [])
+        self.sha384       = self.library.bind(self.library.crypto, "EVP_sha384", VOID_P, [])
+        self.sha512       = self.library.bind(self.library.crypto, "EVP_sha512", VOID_P, [])
 
     @staticmethod
     def measure(length: int) -> bytes:
@@ -175,13 +172,13 @@ class DNSSECValidator:
             raise DNSSECError("An empty RRset cannot be signed or verified.")
 
         owner = records[0].name.lower()
-        labels = DNSName.split(owner)
+        labels = DNSRecordName.split(owner)
 
         if len(labels) > rrsig.labels:
             owner = "*." + ".".join(label.decode(errors="replace") for label in labels[len(labels) - rrsig.labels:])
 
         head = replace(rrsig, signature=b"").pack()
-        entry = DNSName.wire(owner) + DNSMessage.code(records[0].type).to_bytes(2, "big") + DNSMessage.classify(records[0].rclass).to_bytes(2, "big") + rrsig.original_ttl.to_bytes(4, "big")
+        entry = DNSRecordName.wire(owner) + DNSMessage.code(records[0].type).to_bytes(2, "big") + DNSMessage.classify(records[0].rclass).to_bytes(2, "big") + rrsig.original_ttl.to_bytes(4, "big")
 
         pieces = sorted({self.canonize(record.data).pack() for record in records})
 
@@ -205,7 +202,7 @@ class DNSSECValidator:
         if not records or any(record.type != signature.type_covered for record in records):
             return False
 
-        if DNSName.key(dnskey.name) != DNSName.key(signature.signer):
+        if DNSRecordName.key(dnskey.name) != DNSRecordName.key(signature.signer):
             return False
 
         if key.protocol != 3 or not (key.flags & DNSKEYRecordData.ZONE_KEY):
@@ -235,7 +232,7 @@ class DNSSECValidator:
         if digest is None:
             return False
 
-        return digest(DNSName.wire(dnskey.name.lower()) + key.pack()).digest() == delegation.digest
+        return digest(DNSRecordName.wire(dnskey.name.lower()) + key.pack()).digest() == delegation.digest
 
     async def chain(self, client, name: str, type: Union[DNSRecordType, int], *, now: Optional[float] = None) -> bool:
         return await self.attest(client, await client.query(name, type, do=True), now=now)
@@ -245,7 +242,7 @@ class DNSSECValidator:
         signatures: Dict[Tuple[str, int], List[DNSRecord]] = {}
 
         for record in response.answers:
-            spot = (DNSName.key(record.name), DNSMessage.code(record.data.type_covered if isinstance(record.data, RRSIGRecordData) else record.type))
+            spot = (DNSRecordName.key(record.name), DNSMessage.code(record.data.type_covered if isinstance(record.data, RRSIGRecordData) else record.type))
 
             (signatures if record.type == DNSRecordType.RRSIG else groups).setdefault(spot, []).append(record)
 
@@ -281,7 +278,7 @@ class DNSSECValidator:
         raise DNSSECError(f"No signature over the {getattr(records[0].type, 'name', records[0].type)} RRset of {records[0].name!r} verifies.")
 
     async def establish(self, client, zone: str, zones: Dict, now: Optional[float], depth: int = 0) -> Union[DNSRecords, bool]:
-        spot = DNSName.key(zone)
+        spot = DNSRecordName.key(zone)
 
         if spot in zones:
             return zones[spot]

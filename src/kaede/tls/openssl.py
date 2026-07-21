@@ -9,7 +9,7 @@ import ctypes.util
 from ssl import CERT_NONE, CERT_REQUIRED
 from typing import Optional, List, Dict
 
-from .models import TLSVersion, TLSConfig
+from .models import TLSVersion, TLSConfig, TLSLimits
 from .errors import TLSLibraryNotFoundError, TLSLibraryError, TLSConfigError, TLSHandshakeError, TLSVerificationError, TLSProtocolError, TLSClosedError, TLSECHError
 from .helpers.ech import ECHConfigList, ECHStatus
 
@@ -630,11 +630,11 @@ class TLSContext:
             raise TLSConfigError(f"The private key {keyfile!r} does not match the certificate: {self.library.reason()}")
 
     def apply_ech(self):
-        if not self.config.ech_pemfiles:
+        if self.config.echfile is None:
             return
 
         if not self.server:
-            raise TLSConfigError("ech_pemfiles configures a TLS server: a client encrypts its Client Hello with the ECHConfigList passed to session(), not a PEM file.")
+            raise TLSConfigError("echfile configures a TLS server: a client encrypts its Client Hello with the ECHConfigList passed to session(), not a PEM file.")
 
         if self.library.echstore_new is None:
             raise TLSConfigError("This OpenSSL does not provide ECH (Encrypted Client Hello): OpenSSL 4.0 or newer is required.")
@@ -645,25 +645,24 @@ class TLSContext:
             raise TLSConfigError(f"Could not create the ECH store: {self.library.reason()}")
 
         try:
-            for path in self.config.ech_pemfiles:
-                try:
-                    with open(path, "rb") as file:
-                        raw = file.read()
+            try:
+                with open(self.config.echfile, "rb") as file:
+                    raw = file.read()
 
-                except OSError as error:
-                    raise TLSConfigError(f"Could not read the ECH configuration {path!r}: {error}")
+            except OSError as error:
+                raise TLSConfigError(f"Could not read the ECH configuration {self.config.echfile!r}: {error}")
 
-                source = self.library.bio_buffer(raw, len(raw))
+            source = self.library.bio_buffer(raw, len(raw))
 
-                if not source:
-                    raise TLSConfigError(f"Could not buffer the ECH configuration {path!r}: {self.library.reason()}")
+            if not source:
+                raise TLSConfigError(f"Could not buffer the ECH configuration {self.config.echfile!r}: {self.library.reason()}")
 
-                try:
-                    if self.library.echstore_read_pem(store, source, 1) != 1:
-                        raise TLSConfigError(f"Could not load the ECH configuration {path!r}: {self.library.reason()}")
+            try:
+                if self.library.echstore_read_pem(store, source, 1) != 1:
+                    raise TLSConfigError(f"Could not load the ECH configuration {self.config.echfile!r}: {self.library.reason()}")
 
-                finally:
-                    self.library.bio_free(source)
+            finally:
+                self.library.bio_free(source)
 
             if self.library.context_set_echstore(self.pointer, store) != 1:
                 raise TLSConfigError(f"Could not apply the ECH configuration to the context: {self.library.reason()}")
@@ -900,7 +899,7 @@ class TLSSession:
         self.ended = True
         self.library.bio_control(self.incoming, Control.SET_MEM_EOF_RETURN, 0, None)
 
-    def read(self, n: int = 16384) -> bytes:
+    def read(self, n: int = TLSLimits.read_chunk_size) -> bytes:
         buffer = ctypes.create_string_buffer(n)
 
         self.library.error_clear()

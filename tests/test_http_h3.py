@@ -11,7 +11,7 @@ from kaede.http.responses import JSONResponse
 from kaede.http.errors import HTTPError
 from kaede.http.finalizer import finalize_response
 from kaede.http.api.server import HTTPServer, HTTPServerConfig, HTTPHandler
-from kaede.http.api.client import HTTPClient, HTTPClientConfig
+from kaede.http.api.client import HTTPClient, HTTPClientConfig, HTTPClientLimits
 from kaede.http.protocol.h3 import H3Connection, H3Error
 
 LOCAL = "127.0.0.1"
@@ -40,13 +40,13 @@ class Running:
 
         config = HTTPServerConfig(versions=["HTTP/3.0"])
         config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE)
-        config.handshake_timeout = 10
+        config.limits.handshake_timeout = 10
 
         self.server = HTTPServer(config=config)
         self.handler = handler or Echo()
 
     async def __aenter__(self):
-        await self.server.listen(self.handler, [(LOCAL, HTTPPort("quic", UDPPort(0), True))])
+        await self.server.listen(self.handler, [(LOCAL, HTTPPort("quic", UDPPort(0)))])
         return self.server
 
     async def __aexit__(self, *_):
@@ -58,7 +58,7 @@ def endpoint(server) -> str:
     return f"https://{LOCAL}:{int(port.value)}"
 
 def client(authority) -> HTTPClient:
-    config = HTTPClientConfig(versions=["HTTP/3.0"], connect_timeout=10)
+    config = HTTPClientConfig(versions=["HTTP/3.0"], limits=HTTPClientLimits(timeout_connection=10))
     config.tls = TLSConfig(cafile=authority.ca)
 
     return HTTPClient(config=config)

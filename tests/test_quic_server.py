@@ -6,7 +6,7 @@ import pytest
 from kaede.tls import TLSConfig
 from kaede.tls.errors import TLSConfigError
 from kaede.udp.models import UDPPort
-from kaede.quic import QUICClient, QUICClientConfig, QUICServer, QUICServerConfig, QUICServerLimits, QUICHandler
+from kaede.quic import QUICClient, QUICClientConfig, QUICClientLimits, QUICServer, QUICServerConfig, QUICServerLimits, QUICHandler
 from kaede.quic.tls import QTLS
 from kaede.quic.errors import QUICError, QUICTimeoutError
 
@@ -28,10 +28,11 @@ class Running:
     def __init__(self, on_connection, certificate, *, alpn=None, idle_timeout=10, limits=None):
         certfile, keyfile = certificate
 
-        config = QUICServerConfig(idle_timeout=idle_timeout)
+        config = QUICServerConfig()
+        config.limits.idle_timeout = idle_timeout
         config.tls = TLSConfig(certfile=certfile, keyfile=keyfile, verify_mode=CERT_NONE)
         config.alpn = ["kaede/1"] if alpn is None else alpn
-        config.handshake_timeout = 10
+        config.limits.handshake_timeout = 10
 
         if limits is not None:
             config.limits = limits
@@ -47,7 +48,7 @@ class Running:
         await self.server.close(timeout=3)
 
 def client(server, authority, *, alpn=None, hostname="localhost", verify=True, timeout=10):
-    config = QUICClientConfig(connect_timeout=timeout)
+    config = QUICClientConfig(limits=QUICClientLimits(timeout_connection=timeout))
     config.tls = TLSConfig(cafile=authority.ca) if verify else TLSConfig(verify_mode=CERT_NONE)
     config.alpn = ["kaede/1"] if alpn is None else alpn
     config.hostname = hostname
@@ -285,7 +286,7 @@ class TestConfiguration:
         # RFC 9000 section 10.1's max_idle_timeout is a transport parameter that
         # OpenSSL owns. This one is the server's own reaping on top of it, so it
         # has a plain default rather than trying to mirror the transport's.
-        assert QUICServerConfig().idle_timeout == 30.0
+        assert QUICServerLimits().idle_timeout == 30.0
 
     def test_address_validation_is_on_by_default(self):
         # RFC 9000 section 8.1: making a peer prove its address before serving

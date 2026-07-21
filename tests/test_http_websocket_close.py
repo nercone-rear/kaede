@@ -1,4 +1,4 @@
-"""Close frames and frame length encoding, from RFC 6455 §5.2, §5.5.1 and §7.4."""
+"""WSCloseCode frames and frame length encoding, from RFC 6455 §5.2, §5.5.1 and §7.4."""
 
 import struct
 
@@ -6,7 +6,7 @@ import pytest
 
 from kaede.tcp.errors import TCPClosedError
 from kaede.http.errors import WebSocketError
-from kaede.http.websocket import Close, Opcode, WSFrame, WSConnection
+from kaede.http.websocket import WSCloseCode, WSOpCode, WSFrame, WSConnection
 
 class Wire:
     """A transport that hands out prepared octets and keeps whatever is written to it.
@@ -59,25 +59,25 @@ class TestCloseCodes:
 
     @pytest.mark.parametrize("value", [1005, 1006, 1015, 1004, 0, 999, 5000, 2999])
     def test_a_forbidden_code_is_not_sendable(self, value):
-        assert not Close.sendable(value)
+        assert not WSCloseCode.sendable(value)
 
     @pytest.mark.parametrize("value", [1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 3000, 4999])
     def test_an_allowed_code_is_sendable(self, value):
-        assert Close.sendable(value)
+        assert WSCloseCode.sendable(value)
 
     @pytest.mark.parametrize("value", [1005, 1006, 1015, 1004, 999, 5000])
     def test_a_forbidden_code_is_not_receivable(self, value):
-        assert not Close.receivable(value)
+        assert not WSCloseCode.receivable(value)
 
 class TestCloseFrames:
     async def test_a_forbidden_code_is_never_written_to_the_wire(self):
         wire = Wire()
         connection = WSConnection(("", None), ("", None), transport=wire, server=True)
 
-        await connection.close(Close.ABNORMAL, "transport failed")
+        await connection.close(WSCloseCode.ABNORMAL, "transport failed")
 
-        assert code(wire) != Close.ABNORMAL
-        assert Close.sendable(code(wire))
+        assert code(wire) != WSCloseCode.ABNORMAL
+        assert WSCloseCode.sendable(code(wire))
 
     async def test_a_peer_close_carrying_a_forbidden_code_is_refused(self):
         """The exact case that echoed 1006 straight back: a code that can only ever describe
@@ -88,7 +88,7 @@ class TestCloseFrames:
         with pytest.raises(WebSocketError):
             await connection.acknowledge(struct.pack(">H", 1006))
 
-        assert code(wire) == Close.PROTOCOL
+        assert code(wire) == WSCloseCode.PROTOCOL
 
     async def test_a_peer_close_is_echoed_with_its_own_code(self):
         wire = Wire()
@@ -105,7 +105,7 @@ class TestCloseFrames:
 
         await connection.acknowledge(b"")
 
-        assert code(wire) == Close.NORMAL
+        assert code(wire) == WSCloseCode.NORMAL
 
     async def test_a_one_octet_close_body_is_a_protocol_error(self):
         # §5.5.1: the body is either empty or at least a two octet code.
@@ -115,7 +115,7 @@ class TestCloseFrames:
         with pytest.raises(WebSocketError):
             await connection.acknowledge(b"\x03")
 
-        assert code(wire) == Close.PROTOCOL
+        assert code(wire) == WSCloseCode.PROTOCOL
 
     async def test_a_close_reason_that_is_not_utf_8_is_refused(self):
         wire = Wire()
@@ -124,23 +124,23 @@ class TestCloseFrames:
         with pytest.raises(WebSocketError):
             await connection.acknowledge(struct.pack(">H", 1000) + b"\xff\xfe")
 
-        assert code(wire) == Close.INVALID
+        assert code(wire) == WSCloseCode.INVALID
 
 class TestCloseReason:
     """§5.5 caps a control frame payload at 125 octets, and §5.5.1 requires valid UTF-8."""
 
     def test_a_long_reason_is_trimmed_to_fit(self):
-        assert len(Close.clip("x" * 300)) == 123
+        assert len(WSCloseCode.clip("x" * 300)) == 123
 
     def test_a_reason_is_never_cut_through_a_character(self):
         # Three octets each, so a plain 123 octet slice would land inside the 41st character.
-        clipped = Close.clip("あ" * 60)
+        clipped = WSCloseCode.clip("あ" * 60)
 
         assert len(clipped) <= 123
         assert clipped.decode() == "あ" * 41
 
     def test_a_short_reason_is_untouched(self):
-        assert Close.clip("bye") == b"bye"
+        assert WSCloseCode.clip("bye") == b"bye"
 
 class TestLengthEncoding:
     """§5.2 requires the minimal length encoding, so a length has to use the shortest form."""
@@ -165,7 +165,7 @@ class TestLengthEncoding:
     async def test_the_minimal_form_is_accepted(self):
         fin, opcode, payload, masked = await self.read(b"\x81\x05Hello")
 
-        assert (fin, opcode, payload, masked) == (True, Opcode.TEXT, b"Hello", False)
+        assert (fin, opcode, payload, masked) == (True, WSOpCode.TEXT, b"Hello", False)
 
     async def test_the_two_octet_form_is_accepted_where_it_is_needed(self):
         body = b"x" * 200

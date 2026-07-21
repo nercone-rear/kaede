@@ -5,30 +5,40 @@ class Characters:
     LOWER = frozenset("abcdefghijklmnopqrstuvwxyz")
     UPPER = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
-    HEXDEC = frozenset("0123456789abcdefABCDEF")
-    HEXDIG = frozenset(b"0123456789abcdefABCDEF")
-    BASE64 = frozenset("+/=") | DIGIT | LOWER | UPPER
+    HEXDEC = DIGIT | frozenset("abcdefABCDEF")
+    BASE64 = UPPER | LOWER | DIGIT | frozenset("+/=")
+
+    # IP
+    IP_ADDRESS_V4 = DIGIT  | frozenset(".")
+    IP_ADDRESS_V6 = HEXDEC | frozenset(":.[]") # ":." also covers IPv4-mapped forms like ::ffff:192.0.2.1
+    IP_ADDRESS    = IP_ADDRESS_V4 | IP_ADDRESS_V6
+
+    # URL
+    URL_GEN_DELIMS = frozenset(":/?#[]@")
+    URL_SUB_DELIMS = frozenset("!$&'()*+,;=")
+    URL_UNRESERVED = UPPER | LOWER | DIGIT | frozenset("-._~")
+    URL_ENCODED    = URL_GEN_DELIMS | URL_SUB_DELIMS | URL_UNRESERVED | frozenset("%")
 
 class Digits:
-    DECIMAL     = Characters.DIGIT
-    HEXADECIMAL = Characters.HEXDEC
-
     @staticmethod
-    def decimal(value: Union[str, bytes], *, width: Optional[int] = None) -> Optional[int]:
-        return Digits.read(value, Digits.DECIMAL, 10, width)
-
-    @staticmethod
-    def hexadecimal(value: Union[str, bytes], *, width: Optional[int] = None) -> Optional[int]:
-        return Digits.read(value, Digits.HEXADECIMAL, 16, width)
-
-    @staticmethod
-    def read(value: Union[str, bytes], allowed: frozenset, base: int, width: Optional[int]) -> Optional[int]:
-        text = value.decode("latin-1") if isinstance(value, (bytes, bytearray)) else value
+    def read(value: Union[str, bytes], *, charset: frozenset, base: int, width: Optional[int]) -> Optional[int]:
+        if isinstance(value, str):
+            text = value
+        elif isinstance(value, (bytes, bytearray)):
+            text = value.decode("latin-1")
 
         if not text or (width is not None and len(text) != width):
             return None
 
-        if not allowed.issuperset(text):
+        if not charset.issuperset(text):
             return None
 
         return int(text, base)
+
+    @staticmethod
+    def decimal(value: Union[str, bytes], *, width: Optional[int] = None) -> Optional[int]:
+        return Digits.read(value, charset=Characters.DIGIT, base=10, width=width)
+
+    @staticmethod
+    def hexadecimal(value: Union[str, bytes], *, width: Optional[int] = None) -> Optional[int]:
+        return Digits.read(value, charset=Characters.HEXDEC, base=16, width=width)

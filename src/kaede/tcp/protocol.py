@@ -7,15 +7,17 @@ from .errors import TCPConnectionError, TCPClosedError, TCPLostError, TCPTimeout
 
 if TYPE_CHECKING:
     from .api.server import TCPHandler
+    from .api.common import TCPLimits
 
 class TCPConnection:
-    buffer_limit = 65536
+    def __init__(self, src: Tuple[str, TCPPort], dst: Tuple[str, TCPPort], *, handler: Optional["TCPHandler"] = None, protocol: Optional["TCPProtocol"] = None, limits: Optional["TCPLimits"] = None):
+        from .api.common import TCPLimits
 
-    def __init__(self, src: Tuple[str, TCPPort], dst: Tuple[str, TCPPort], *, handler: Optional["TCPHandler"] = None, protocol: Optional["TCPProtocol"] = None):
         self.src = src
         self.dst = dst
         self.handler = handler
         self.protocol = protocol
+        self.limits = limits or TCPLimits()
 
         self.transport: Optional[asyncio.Transport] = None
 
@@ -120,7 +122,7 @@ class TCPConnection:
         if not separator:
             raise ValueError("The separator must not be empty.")
 
-        limit = self.buffer_limit if limit is None else limit
+        limit = self.limits.max_buffer_size if limit is None else limit
         start = 0
 
         while True:
@@ -204,7 +206,7 @@ class TCPConnection:
         return data
 
     def full(self) -> bool:
-        return len(self.buffer) >= max(self.buffer_limit, self.need)
+        return len(self.buffer) >= max(self.limits.max_buffer_size, self.need)
 
     def attach(self, transport: asyncio.Transport):
         self.transport = transport
@@ -273,10 +275,11 @@ class TCPConnection:
             self.reader.set_result(None)
 
 class TCPProtocol(asyncio.Protocol):
-    def __init__(self, src: Optional[Tuple[str, TCPPort]] = None, handler: Optional["TCPHandler"] = None, connection: Optional[TCPConnection] = None):
+    def __init__(self, src: Optional[Tuple[str, TCPPort]] = None, handler: Optional["TCPHandler"] = None, connection: Optional[TCPConnection] = None, limits: Optional["TCPLimits"] = None):
         self.src = src
         self.handler = handler
         self.connection = connection
+        self.limits = limits
         self.transport: Optional[asyncio.Transport] = None
 
     @staticmethod
@@ -293,7 +296,7 @@ class TCPProtocol(asyncio.Protocol):
         dst = TCPProtocol.address(transport.get_extra_info("peername"))
 
         if self.connection is None:
-            self.connection = TCPConnection(src, dst, handler=self.handler, protocol=self)
+            self.connection = TCPConnection(src, dst, handler=self.handler, protocol=self, limits=self.limits)
         else:
             self.connection.src = src
             self.connection.dst = dst

@@ -3,7 +3,7 @@ import socket
 
 import pytest
 
-from kaede.tcp import TCPPort, TCPConnection, TCPProtocol
+from kaede.tcp import TCPPort, TCPConnection, TCPProtocol, TCPLimits
 from kaede.tcp.errors import TCPConnectionError, TCPClosedError, TCPTimeoutError, TCPBusyError, TCPLimitError
 
 # The peer in these tests is the standard library's asyncio server rather than
@@ -170,7 +170,7 @@ class TestReceive:
 
     async def test_receive_exactly_beyond_the_buffer_limit(self):
         # A request larger than buffer_limit must not deadlock against flow control.
-        size = TCPConnection.buffer_limit * 4
+        size = TCPLimits().max_buffer_size * 4
         payload = b"K" * size
 
         async def send(reader, writer):
