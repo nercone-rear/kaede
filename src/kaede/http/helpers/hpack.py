@@ -593,6 +593,7 @@ class HPACKDecoder:
         headers: List[Tuple[str, str]] = []
         offset = 0
         total = 0
+        started = False
 
         while offset < len(data):
             byte = data[offset]
@@ -607,6 +608,9 @@ class HPACKDecoder:
                 self.table.add(name, value)
 
             elif byte & 0x20: # dynamic table size update
+                if started:
+                    raise HPACKError("A dynamic table size update must appear at the start of a header block.")
+
                 size, offset = Coding.read_integer(data, offset, 5)
 
                 if size > self.limit:
@@ -619,6 +623,7 @@ class HPACKDecoder:
                 never = bool(byte & 0x10)
                 name, value, offset = self.line(data, offset, 4)
 
+            started = True
             total += HPACKTable.cost(name, value)
 
             if total > self.max_header_list:

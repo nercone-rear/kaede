@@ -144,6 +144,7 @@ class H2Protocol(HTTPProtocol):
         self.flow = asyncio.Condition()
 
         self.pending: Optional[Tuple[int, bytes, bool]] = None
+        self.introduced = False
         self.closing = False
         self.error: Optional[Exception] = None
 
@@ -269,6 +270,12 @@ class H2Protocol(HTTPProtocol):
             pass
 
     async def handle(self, frame: H2Frame):
+        if not self.introduced:
+            if frame.type != Frame.SETTINGS:
+                raise H2Error(Code.PROTOCOL_ERROR, "The connection preface is not followed by a SETTINGS frame.")
+
+            self.introduced = True
+
         if self.pending is not None and frame.type != Frame.CONTINUATION:
             raise H2Error(Code.PROTOCOL_ERROR, "A CONTINUATION frame was expected.")
 
@@ -922,7 +929,7 @@ class H2Connection(HTTPConnection):
 
         if streaming or self.lengthless(response):
             headers.remove("Content-Length")
-        else:
+        elif payload or not bodiless:
             headers.set("Content-Length", str(len(payload)))
 
         fields = [(":status", str(response.status_code))] + self.regular(headers)
