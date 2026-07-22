@@ -232,7 +232,10 @@ class H3Protocol(HTTPProtocol):
                 await self.qpack_stream(stream, kind)
 
             elif kind == Stream.PUSH:
-                raise H3Error(Code.STREAM_CREATION_ERROR, "A push stream arrived where none is allowed.")
+                if self.role == HTTPBroadRole.SERVER:
+                    raise H3Error(Code.STREAM_CREATION_ERROR, "A client opened a push stream, which only a server may do.")
+
+                raise H3Error(Code.ID_ERROR, "A push stream exceeds the maximum push id, which is zero when no MAX_PUSH_ID was sent.")
 
             else:
                 await self.drain(stream)
@@ -459,13 +462,17 @@ class H3Connection(HTTPConnection):
                 raise H3Error(Code.FRAME_UNEXPECTED, f"The reserved frame type {kind:#x} arrived on a request stream.")
 
             if kind == Kind.HEADERS:
-                if trailers is not None:
-                    raise H3Error(Code.FRAME_UNEXPECTED, "A third HEADERS frame arrived on a request stream.")
+                block = self.unpack(payload)
 
                 if fields is None:
-                    fields = self.unpack(payload)
+                    if self.role != HTTPBroadRole.SERVER and self.interim(block):
+                        continue
+
+                    fields = block
+                elif trailers is None:
+                    trailers = block
                 else:
-                    trailers = self.unpack(payload)
+                    raise H3Error(Code.FRAME_UNEXPECTED, "A third HEADERS frame arrived on a request stream.")
 
             elif kind == Kind.DATA:
                 if fields is None:
@@ -499,6 +506,15 @@ class H3Connection(HTTPConnection):
 
         except QPACKError as e:
             raise H3Error(Code.QPACK_DECOMPRESSION_FAILED, str(e))
+
+    def interim(self, fields: List[Tuple[str, str]]) -> bool:
+        for name, value in fields:
+            if name == ":status":
+                code = Digits.decimal(value, width=3)
+
+                return code is not None and code < 200
+
+        return False
 
     def split(self, fields: List[Tuple[str, str]], *, trailer: bool) -> Tuple[Dict[str, str], HTTPHeaders]:
         pseudo: Dict[str, str] = {}
@@ -715,7 +731,7 @@ class H3Connection(HTTPConnection):
 
         if streaming or self.lengthless(response):
             headers.remove("Content-Length")
-        else:
+        elif payload or not bodiless:
             headers.set("Content-Length", str(len(payload)))
 
         await self.frame_out(Kind.HEADERS, self.session.encoder.encode([(":status", str(response.status_code))] + self.regular(headers)))

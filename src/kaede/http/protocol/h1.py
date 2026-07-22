@@ -145,11 +145,14 @@ class H1Connection(HTTPConnection):
         except ValueError as e:
             raise HTTPError(400, f"Bad Request: {e}")
 
+    def tunnelling(self, response: HTTPResponse) -> bool:
+        return self.request is not None and self.request.method == "CONNECT" and 200 <= response.status_code < 300
+
     def bodiless(self, response: HTTPResponse) -> bool:
-        return response.status_code < 200 or response.status_code in (204, 304) or (self.request is not None and self.request.method == "HEAD")
+        return response.status_code < 200 or response.status_code in (204, 304) or (self.request is not None and self.request.method == "HEAD") or self.tunnelling(response)
 
     def lengthless(self, response: HTTPResponse) -> bool:
-        return response.status_code < 200 or response.status_code == 204
+        return response.status_code < 200 or response.status_code == 204 or self.tunnelling(response)
 
     def frame(self, message: HTTPMessage, *, request: bool) -> Tuple[bool, int]:
         headers = message.headers
@@ -171,14 +174,21 @@ class H1Connection(HTTPConnection):
         if te:
             codings = [token.strip().lower() for value in te for token in value.split(",") if token.strip()]
 
-            if codings == ["chunked"]:
+            if codings[-1:] == ["chunked"]:
+                if codings == ["chunked"]:
+                    return (True, 0)
+
+                if request:
+                    raise HTTPError(501, "Only the chunked transfer coding is supported.")
+
                 return (True, 0)
 
-            if codings[-1:] == ["chunked"]:
-                raise HTTPError(501, "Only the chunked transfer coding is supported.")
+            if request:
+                self.closing = True
+                raise HTTPError(400, "Transfer-Encoding does not end in chunked.")
 
             self.closing = True
-            raise HTTPError(400, "Transfer-Encoding does not end in chunked.")
+            return (False, -1)
 
         if cl:
             values = {token.strip() for value in cl for token in value.split(",") if token.strip()}
@@ -254,6 +264,9 @@ class H1Connection(HTTPConnection):
 
                 return bytes(data)
 
+            if len(data) + size > self.limits.max_message_body_size:
+                raise HTTPError(413, "Content Too Large")
+
             try:
                 chunk = await self.transport.receive_exactly(size)
                 crlf = await self.transport.receive_exactly(2)
@@ -265,9 +278,6 @@ class H1Connection(HTTPConnection):
                 raise HTTPError(400, "A chunk is not terminated by CRLF.")
 
             data += chunk
-
-            if len(data) > self.limits.max_message_body_size:
-                raise HTTPError(413, "Content Too Large")
 
     def trailer(self, trailers: HTTPHeaders) -> HTTPHeaders:
         offender = trailers.trailing()
@@ -395,14 +405,19 @@ class H1Connection(HTTPConnection):
             if chunked_ok:
                 headers.set("Transfer-Encoding", "chunked")
             else:
+                if self.role != HTTPBroadRole.SERVER:
+                    raise HTTPError(500, "A streaming request body needs the chunked transfer coding, which HTTP/1.0 lacks.")
+
                 headers.remove("Transfer-Encoding")
+                self.closing = True
+                headers.set("Connection", "close")
         else:
             payload = self.materialize(message.body)
             headers.remove("Transfer-Encoding")
 
             if lengthless:
                 headers.remove("Content-Length")
-            else:
+            elif payload or not bodiless:
                 headers.set("Content-Length", str(len(payload)))
 
         try:
@@ -413,6 +428,10 @@ class H1Connection(HTTPConnection):
 
             if streaming and chunked_ok:
                 await self.stream(message)
+            elif streaming:
+                async for chunk in message.body:
+                    if chunk:
+                        await self.transport.send(chunk)
             else:
                 await self.transport.send(payload)
 
